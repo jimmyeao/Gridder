@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<ContentView xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             xmlns:vm="clr-namespace:Gridder.ViewModels"
+             xmlns:controls="clr-namespace:Gridder.Controls"
+             x:Class="Gridder.Views.WaveformEditorView"
+             x:DataType="vm:WaveformEditorViewModel">
+
+    <Grid RowDefinitions="Auto,*,Auto" BackgroundColor="#0d0d0d">
+
+        <!-- Toolbar -->
+        <Grid Grid.Row="0"
+              ColumnDefinitions="Auto,Auto,Auto,*,Auto,Auto,Auto"
+              BackgroundColor="#141418"
+              Padding="8,4">
+
+            <Button Grid.Column="0" Text="-"
+                    Command="{Binding ZoomOutCommand}"
+                    BackgroundColor="#1e1e2e" TextColor="#e0e0e0"
+                    WidthRequest="36" HeightRequest="32"
+                    FontAttributes="Bold" Padding="0" />
+            <Label Grid.Column="1" Text="Zoom"
+                   TextColor="#666666" FontSize="11"
+                   VerticalTextAlignment="Center" Margin="6,0" />
+            <Button Grid.Column="2" Text="+"
+                    Command="{Binding ZoomInCommand}"
+                    BackgroundColor="#1e1e2e" TextColor="#e0e0e0"
+                    WidthRequest="36" HeightRequest="32"
+                    FontAttributes="Bold" Padding="0" />
+
+            <HorizontalStackLayout Grid.Column="3" HorizontalOptions="Center" Spacing="16">
+                <Label Text="{Binding BpmDisplay}"
+                       TextColor="#00d4ff" FontSize="16"
+                       FontAttributes="Bold" VerticalTextAlignment="Center" />
+                <Label Text="{Binding BeatsDisplay}"
+                       TextColor="#888888" FontSize="12"
+                       VerticalTextAlignment="Center" />
+                <Label Text="{Binding SegmentsDisplay}"
+                       TextColor="#888888" FontSize="12"
+                       VerticalTextAlignment="Center" />
+            </HorizontalStackLayout>
+
+            <Button Grid.Column="6" Text="Fit"
+                    Command="{Binding ZoomToFitCommand}"
+                    BackgroundColor="#1e1e2e" TextColor="#e0e0e0"
+                    WidthRequest="44" HeightRequest="32"
+                    FontSize="11" Padding="0" />
+        </Grid>
+
+        <!-- Waveform Canvas -->
+        <controls:WaveformCanvasView Grid.Row="1"
+                                      x:Name="WaveformCanvas" />
+
+        <!-- Scroll bar -->
+        <Slider Grid.Row="2"
+                Minimum="0"
+                Maximum="{Binding TotalDurationSeconds}"
+                Value="{Binding ScrollPositionSeconds, Mode=TwoWay}"
+                ThumbColor="#00d4ff"
+                MinimumTrackColor="#00d4ff"
+                MaximumTrackColor="#333333"
+                Margin="8,2" />
+    </Grid>
+
+</ContentView>
