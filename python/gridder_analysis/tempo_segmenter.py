@@ -28,7 +28,7 @@ def segment_tempo(beat_times: np.ndarray,
     Pipeline:
       1. Build initial segments (every beat verified against Serato's
          interpolation grid within drift tolerance)
-      2. Remove outlier micro-segments (short + BPM far from neighbors)
+      2. Bridge over outlier micro-segments by connecting good neighbors
     """
     if len(beat_times) < 2:
         if len(beat_times) == 1:
@@ -49,16 +49,22 @@ def segment_tempo(beat_times: np.ndarray,
     segments = _build_segments(beat_times, max_drift_ms)
     print(f"  Initial: {len(segments)} segments", file=sys.stderr)
 
-    # Step 2: Merge outlier micro-segments
-    segments = _merge_outliers(segments, beat_times)
-    print(f"  After outlier merge: {len(segments)} segments", file=sys.stderr)
+    # Step 2: Bridge over outlier micro-segments
+    segments = _bridge_outliers(segments, beat_times, max_drift_ms)
+    print(f"  After bridging: {len(segments)} segments", file=sys.stderr)
+
+    # Step 3: Consolidate if all segments have similar BPMs.
+    # For constant-tempo tracks (EDM/electronic), the segmenter may create
+    # many segments because individual beat timing variations exceed the
+    # per-beat drift tolerance. But if all segments are within a narrow BPM
+    # range, the track is effectively constant-tempo and should be one segment.
+    segments = _consolidate_constant_tempo(segments, beat_times)
 
     # Log final segments with implicit BPMs (what Serato will actually use)
     print(f"  Final: {len(segments)} segment(s):", file=sys.stderr)
     for i, seg in enumerate(segments):
         implicit_bpm = seg["bpm"]
         if i + 1 < len(segments):
-            # For non-terminal: implicit BPM from positions
             nxt = segments[i + 1]
             span = nxt["start_position"] - seg["start_position"]
             if span > 0 and seg["beat_count"] > 0:
@@ -71,16 +77,22 @@ def segment_tempo(beat_times: np.ndarray,
     return segments
 
 
-def _merge_outliers(segments: list[dict], beat_times: np.ndarray,
-                    min_beats: int = 8, bpm_outlier_pct: float = 5.0
-                    ) -> list[dict]:
+def _bridge_outliers(segments: list[dict], beat_times: np.ndarray,
+                     max_drift_ms: float,
+                     min_beats: int = 8, bpm_outlier_pct: float = 5.0
+                     ) -> list[dict]:
     """
-    Merge short segments whose BPM is far from the weighted average.
-    These are typically false detections in vocal/string/intro sections.
+    Bridge over outlier micro-segments by connecting good neighbors.
 
-    A segment is an outlier if:
-      - It has fewer than min_beats beats AND
-      - Its BPM differs from the weighted average by > bpm_outlier_pct %
+    Instead of merging outlier beats INTO neighbors (which can ruin the
+    neighbor's grid), we try to extend the previous good segment directly
+    to the start of the next good segment, effectively absorbing the
+    outlier beats into a larger interpolation grid.
+
+    The bridge is accepted if the Serato interpolation drift for the
+    good beats within the bridged segment stays within tolerance.
+    The outlier beats may have high drift, but that's OK because they
+    were false detections anyway.
     """
     if len(segments) <= 1:
         return segments
@@ -89,56 +101,224 @@ def _merge_outliers(segments: list[dict], beat_times: np.ndarray,
     if total_beats == 0:
         return segments
     weighted_bpm = sum(s["bpm"] * s["beat_count"] for s in segments) / total_beats
+    max_drift_sec = max_drift_ms / 1000.0
 
-    merged = []
-    i = 0
-    while i < len(segments):
-        seg = segments[i]
-        is_outlier = (
+    # Mark which segments are outliers
+    is_outlier = []
+    for seg in segments:
+        outlier = (
             seg["beat_count"] < min_beats and
             abs(seg["bpm"] - weighted_bpm) / weighted_bpm * 100 > bpm_outlier_pct
         )
+        is_outlier.append(outlier)
 
-        if is_outlier and (merged or i + 1 < len(segments)):
-            prev_bpm = merged[-1]["bpm"] if merged else None
-            next_bpm = segments[i + 1]["bpm"] if i + 1 < len(segments) else None
+    # Log outliers
+    for i, (seg, out) in enumerate(zip(segments, is_outlier)):
+        if out:
+            print(f"    Outlier seg {i+1}: {seg['bpm']:.1f} BPM, "
+                  f"{seg['beat_count']} beats @ {seg['start_position']:.1f}s",
+                  file=sys.stderr)
 
-            merge_into_prev = False
-            if prev_bpm is not None and next_bpm is not None:
-                merge_into_prev = (abs(prev_bpm - weighted_bpm) <=
-                                   abs(next_bpm - weighted_bpm))
-            elif prev_bpm is not None:
-                merge_into_prev = True
+    # Build result by bridging over consecutive outliers
+    result = []
+    i = 0
+    while i < len(segments):
+        if is_outlier[i]:
+            # Find the end of this outlier run
+            j = i
+            while j < len(segments) and is_outlier[j]:
+                j += 1
 
-            if merge_into_prev and merged:
-                prev = merged[-1]
-                new_end = seg["end_beat_index"]
-                new_bpm = _implicit_bpm(beat_times, prev["start_beat_index"], new_end)
-                prev["end_beat_index"] = new_end
-                prev["beat_count"] = new_end - prev["start_beat_index"]
-                prev["bpm"] = round(float(new_bpm), 2)
-                print(f"    Merged outlier ({seg['bpm']:.1f} BPM, "
-                      f"{seg['beat_count']} beats @ {seg['start_position']:.1f}s) "
-                      f"<- prev", file=sys.stderr)
-            elif i + 1 < len(segments):
-                nxt = segments[i + 1]
-                new_start_idx = seg["start_beat_index"]
-                new_end = nxt["end_beat_index"]
-                new_bpm = _implicit_bpm(beat_times, new_start_idx, new_end)
-                nxt["start_beat_index"] = new_start_idx
-                nxt["start_position"] = round(float(beat_times[new_start_idx]), 6)
-                nxt["beat_count"] = new_end - new_start_idx
-                nxt["bpm"] = round(float(new_bpm), 2)
-                print(f"    Merged outlier ({seg['bpm']:.1f} BPM, "
-                      f"{seg['beat_count']} beats @ {seg['start_position']:.1f}s) "
-                      f"-> next", file=sys.stderr)
-            else:
-                merged.append(seg)
+            # We have outlier segments from i to j-1
+            # Try to bridge: extend previous good segment to next good segment
+            prev_good = result[-1] if result else None
+            next_good = segments[j] if j < len(segments) else None
+
+            bridged = False
+            if prev_good is not None and next_good is not None:
+                # Try bridging from prev_good's start to next_good's start
+                bridge_start = prev_good["start_beat_index"]
+                bridge_end = next_good["start_beat_index"]
+                bridge_count = bridge_end - bridge_start
+
+                if bridge_count >= 2:
+                    # Check drift of Serato grid, but only for beats that
+                    # were in good segments (not the outlier beats)
+                    drift = _serato_max_drift_good_only(
+                        beat_times, bridge_start, bridge_end,
+                        segments[i]["start_beat_index"],
+                        segments[j-1]["end_beat_index"]
+                    )
+
+                    if drift <= max_drift_sec * 2:  # Allow 2x tolerance for bridging
+                        new_bpm = _implicit_bpm(beat_times, bridge_start, bridge_end)
+                        prev_good["end_beat_index"] = bridge_end
+                        prev_good["beat_count"] = bridge_count
+                        prev_good["bpm"] = round(float(new_bpm), 2)
+                        print(f"    Bridged over {j-i} outlier seg(s) "
+                              f"({segments[i]['start_position']:.1f}s-"
+                              f"{segments[j-1]['start_position']:.1f}s), "
+                              f"drift={drift*1000:.1f}ms", file=sys.stderr)
+                        bridged = True
+
+            if not bridged:
+                # Can't bridge to good neighbors. Combine consecutive
+                # outlier segments into a single transition segment to
+                # reduce wild BPM jumps (one marker at ~140 BPM is much
+                # better than three at 161/143/139).
+                if j - i > 1:
+                    first_out = segments[i]
+                    last_out = segments[j - 1]
+                    combined_start = first_out["start_beat_index"]
+                    combined_end = last_out["end_beat_index"]
+                    combined_bpm = _implicit_bpm(beat_times, combined_start, combined_end)
+                    combined = {
+                        "start_beat_index": combined_start,
+                        "end_beat_index": combined_end,
+                        "start_position": first_out["start_position"],
+                        "bpm": round(float(combined_bpm), 2),
+                        "beat_count": combined_end - combined_start,
+                    }
+                    result.append(combined)
+                    print(f"    Combined {j-i} outlier seg(s) into 1 transition "
+                          f"({combined_bpm:.1f} BPM, {combined['beat_count']} beats)",
+                          file=sys.stderr)
+                else:
+                    result.append(segments[i])
+
+            i = j
         else:
-            merged.append(seg)
-        i += 1
+            result.append(segments[i])
+            i += 1
 
-    return merged
+    return result
+
+
+def _consolidate_constant_tempo(segments: list[dict], beat_times: np.ndarray,
+                                 bpm_range_pct: float = 1.5) -> list[dict]:
+    """
+    If all non-outlier segments have BPMs within a narrow range, consolidate
+    into a single segment. This handles constant-tempo EDM tracks where
+    per-beat timing variations create many segments.
+
+    Args:
+        bpm_range_pct: Max BPM deviation (%) from weighted average for a
+                       segment to be considered "normal" (not an outlier).
+                       At least 85% of beats must be in normal segments.
+    """
+    if len(segments) <= 1:
+        return segments
+
+    # Compute weighted average BPM
+    total_beats = sum(s["beat_count"] for s in segments)
+    if total_beats == 0:
+        return segments
+    weighted_bpm = sum(s["bpm"] * s["beat_count"] for s in segments) / total_beats
+
+    # Classify segments as normal or outlier based on BPM
+    normal_beats = 0
+    for seg in segments:
+        deviation_pct = abs(seg["bpm"] - weighted_bpm) / weighted_bpm * 100
+        if deviation_pct <= bpm_range_pct:
+            normal_beats += seg["beat_count"]
+
+    normal_ratio = normal_beats / total_beats
+
+    if normal_ratio < 0.85:
+        # Too many beats in outlier segments - not truly constant tempo
+        return segments
+
+    # Check Serato grid drift for only "normal" beats (skip outlier segments).
+    # For constant-tempo tracks with noisy detection, normal beat drift is low.
+    # For genuinely variable-tempo tracks (live drummer), drift is high.
+    first = segments[0]
+    last = segments[-1]
+    start_idx = first["start_beat_index"]
+    end_idx = last["end_beat_index"]
+    total_beat_count = end_idx - start_idx
+    total_span = beat_times[end_idx] - beat_times[start_idx]
+
+    if total_span <= 0 or total_beat_count <= 0:
+        return segments
+
+    # Identify beat indices that are in outlier segments
+    outlier_beats = set()
+    for seg in segments:
+        deviation_pct = abs(seg["bpm"] - weighted_bpm) / weighted_bpm * 100
+        if deviation_pct > bpm_range_pct:
+            for bi in range(seg["start_beat_index"], seg["end_beat_index"] + 1):
+                outlier_beats.add(bi)
+
+    # Compute max drift of normal beats against the consolidated grid
+    n = end_idx - start_idx
+    start_pos = beat_times[start_idx]
+    end_pos = beat_times[end_idx]
+    interval = (end_pos - start_pos) / n
+    max_drift = 0.0
+    for k in range(1, n):
+        beat_idx = start_idx + k
+        if beat_idx in outlier_beats:
+            continue
+        expected = start_pos + k * interval
+        actual = beat_times[beat_idx]
+        drift = abs(actual - expected)
+        if drift > max_drift:
+            max_drift = drift
+    max_drift_ms = max_drift * 1000
+
+    # Allow up to 40ms drift for consolidation (2x the per-segment tolerance)
+    # This accepts noisy detection (EDM tracks with ~10-20ms jitter) but
+    # rejects genuinely variable tempo (live drummers with 50ms+ drift)
+    if max_drift_ms > 40.0:
+        print(f"  Consolidation: BPM range OK but normal-beat drift={max_drift_ms:.1f}ms "
+              f"(>{40.0}ms), keeping {len(segments)} segments",
+              file=sys.stderr)
+        return segments
+
+    overall_bpm = 60.0 * total_beat_count / total_span
+
+    print(f"  Consolidating {len(segments)} segments into 1 "
+          f"({normal_ratio*100:.0f}% of beats within ±{bpm_range_pct}% "
+          f"of {weighted_bpm:.1f} BPM, drift={max_drift_ms:.1f}ms, "
+          f"overall={overall_bpm:.2f} BPM)",
+          file=sys.stderr)
+
+    return [{
+        "start_beat_index": first["start_beat_index"],
+        "end_beat_index": last["end_beat_index"],
+        "start_position": first["start_position"],
+        "bpm": round(float(overall_bpm), 2),
+        "beat_count": total_beat_count,
+    }]
+
+
+def _serato_max_drift_good_only(beat_times: np.ndarray, start_idx: int,
+                                 end_idx: int, outlier_start: int,
+                                 outlier_end: int) -> float:
+    """
+    Max drift of Serato interpolation grid, ignoring beats within the
+    outlier range (since those are false detections).
+    """
+    n = end_idx - start_idx
+    if n < 2:
+        return 0.0
+    start_pos = beat_times[start_idx]
+    end_pos = beat_times[end_idx]
+    interval = (end_pos - start_pos) / n
+
+    max_drift = 0.0
+    for k in range(1, n):
+        beat_idx = start_idx + k
+        # Skip beats in the outlier range
+        if outlier_start <= beat_idx <= outlier_end:
+            continue
+        expected = start_pos + k * interval
+        actual = beat_times[beat_idx]
+        drift = abs(actual - expected)
+        if drift > max_drift:
+            max_drift = drift
+
+    return max_drift
 
 
 def _build_segments(beat_times: np.ndarray,
@@ -209,6 +389,21 @@ def _find_segment_end(beat_times: np.ndarray, start: int,
         best_end = candidate_end
 
     return best_end
+
+
+def _serato_max_drift(beat_times: np.ndarray, start_idx: int,
+                      end_idx: int) -> float:
+    """Max drift of any intermediate beat from Serato's interpolation grid."""
+    n = end_idx - start_idx
+    if n < 2:
+        return 0.0
+    start_pos = beat_times[start_idx]
+    end_pos = beat_times[end_idx]
+    interval = (end_pos - start_pos) / n
+    k = np.arange(1, n)
+    expected = start_pos + k * interval
+    actual = beat_times[start_idx + 1:end_idx]
+    return float(np.max(np.abs(actual - expected)))
 
 
 def _implicit_bpm(beat_times: np.ndarray, start_idx: int,

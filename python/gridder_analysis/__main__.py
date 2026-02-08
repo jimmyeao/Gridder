@@ -134,6 +134,126 @@ def main():
                   f"{original_first:.3f}s -> {float(beat_times[0]):.3f}s",
                   file=sys.stderr)
 
+    # Step 2d: Clean out false beat detections.
+    # A beat is likely a false detection if removing it makes the surrounding
+    # interval match the track's tempo, while keeping it creates an interval
+    # that's far off. This catches phantom beats from vocal transients, synth
+    # stabs, etc. that slip through HPSS.
+    # NOTE: This MUST run before grid snapping, because false beats shift
+    # indices and ruin the regression fit.
+    if len(beat_times) >= 4:
+        median_interval = float(np.median(np.diff(beat_times)))
+        # Threshold: interval must be within 20% of median to be "correct"
+        tolerance = 0.20
+
+        removed = 0
+        i = 1
+        while i < len(beat_times) - 1:
+            interval_before = beat_times[i] - beat_times[i - 1]
+            interval_after = beat_times[i + 1] - beat_times[i]
+            combined = beat_times[i + 1] - beat_times[i - 1]
+
+            before_ok = abs(interval_before - median_interval) / median_interval <= tolerance
+            after_ok = abs(interval_after - median_interval) / median_interval <= tolerance
+            combined_ok = abs(combined - median_interval) / median_interval <= tolerance
+
+            # Remove if: at least one neighbor interval is wrong, but removing
+            # this beat would make the combined interval correct
+            if not (before_ok and after_ok) and combined_ok:
+                beat_times = np.delete(beat_times, i)
+                removed += 1
+                # Don't increment i - check the new beat at this position
+            else:
+                # Also catch double-hits: both intervals are short but combined = ~2x median
+                combined_2x_ok = abs(combined - 2 * median_interval) / median_interval <= tolerance
+                both_short = (interval_before < median_interval * (1 - tolerance) and
+                              interval_after < median_interval * (1 - tolerance))
+                if both_short and combined_2x_ok:
+                    beat_times = np.delete(beat_times, i)
+                    removed += 1
+                else:
+                    i += 1
+
+        if removed > 0:
+            print(f"  Removed {removed} false beat detection(s) "
+                  f"(interval tolerance: ±{tolerance*100:.0f}% of "
+                  f"{median_interval*1000:.1f}ms median)",
+                  file=sys.stderr)
+
+    # Step 2e: Snap beats to regular grid if tempo is constant.
+    # For EDM/electronic tracks, beats should be at perfectly even intervals.
+    # After false beat cleaning, use phase-matched regression: assign each
+    # beat its expected "beat number" based on the median interval, then
+    # regress beat_number -> beat_time. This is immune to false insertions
+    # (which shift array indices but not phase-matched beat numbers).
+    if len(beat_times) >= 8:
+        intervals = np.diff(beat_times)
+        q25, q75 = np.percentile(intervals, [25, 75])
+        median_interval = float(np.median(intervals))
+        iqr_ratio = (q75 - q25) / median_interval if median_interval > 0 else 1.0
+
+        if iqr_ratio < 0.03:  # IQR < 3% of median = very constant tempo
+            # Phase-match each beat to its expected beat number.
+            # Only works for very regular tracks (IQR < 3%) where the
+            # median interval is accurate enough to assign correct numbers.
+            first_beat = float(beat_times[0])
+            beat_numbers = np.round(
+                (beat_times - first_beat) / median_interval
+            ).astype(int)
+
+            # Remove duplicates (two beats mapped to same number)
+            _, unique_idx = np.unique(beat_numbers, return_index=True)
+            clean_beats = beat_times[unique_idx]
+            clean_numbers = beat_numbers[unique_idx]
+            n_dupes = len(beat_times) - len(clean_beats)
+
+            # Seed with robust median-based estimates
+            slope = median_interval
+            intercept = float(np.median(clean_beats - clean_numbers * slope))
+
+            # First pass: identify good beats using median-based grid
+            fitted = intercept + clean_numbers * slope
+            residuals = np.abs(clean_beats - fitted)
+            good_mask = residuals < 0.030
+
+            # Iterative regression on good beats only
+            for iteration in range(5):
+                good_idx = np.where(good_mask)[0]
+                if len(good_idx) < 4:
+                    break
+                slope, intercept = np.polyfit(
+                    clean_numbers[good_idx], clean_beats[good_idx], 1
+                )
+                if slope <= 0:
+                    break
+                fitted = intercept + clean_numbers * slope
+                residuals = np.abs(clean_beats - fitted)
+                new_mask = residuals < 0.030
+                if np.array_equal(new_mask, good_mask):
+                    break
+                good_mask = new_mask
+
+            n_good = int(np.sum(good_mask))
+            n_total = len(beat_times)
+
+            if n_good >= len(clean_beats) * 0.85 and slope > 0:
+                # Generate perfect grid from first to last good beat number
+                first_num = int(clean_numbers[good_mask][0])
+                last_num = int(clean_numbers[good_mask][-1])
+                grid_numbers = np.arange(first_num, last_num + 1)
+                grid = intercept + grid_numbers * slope
+                grid = grid[grid >= 0]
+                grid_bpm = 60.0 / slope
+                beat_times = grid
+                print(f"  Snapped {len(grid)} beats to {grid_bpm:.2f} BPM grid "
+                      f"(was {n_total} beats, {n_dupes} dupes, "
+                      f"{n_total - n_dupes - n_good} outliers, "
+                      f"IQR ratio: {iqr_ratio:.4f})", file=sys.stderr)
+            else:
+                print(f"  Grid snap: only {n_good}/{len(clean_beats)} fit "
+                      f"(IQR={iqr_ratio:.4f}), deferring to segmenter",
+                      file=sys.stderr)
+
     # Step 3: Segment tempo
     print("Analyzing tempo segments...", file=sys.stderr)
     tempo_segments = segment_tempo(beat_times)

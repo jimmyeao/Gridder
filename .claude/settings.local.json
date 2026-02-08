@@ -9,7 +9,8 @@
       "Bash(python -m pip install:*)",
       "Bash(python:*)",
       "Bash(cmd /c \"type %LOCALAPPDATA%\\\\Gridder\\\\analysis.log 2>NUL\")",
-      "Bash(findstr:*)"
+      "Bash(findstr:*)",
+      "Bash(powershell:*)"
     ]
   }
 }
