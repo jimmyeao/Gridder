@@ -158,6 +158,9 @@ public partial class MainViewModel : ObservableObject
             }
             AppLogger.Log("Analysis", $"  AllBeatPositions: {beatGrid.AllBeatPositions.Count}");
 
+            // Validate: compute what Serato would actually produce vs actual beats
+            ValidateBeatGridAccuracy(beatGrid, result);
+
             // Store waveform data
             if (result.Waveform != null)
             {
@@ -308,6 +311,53 @@ public partial class MainViewModel : ObservableObject
         {
             StatusMessage = $"Error reading beatgrid: {ex.Message}";
         }
+    }
+
+    private static void ValidateBeatGridAccuracy(BeatGrid grid, AnalysisResult result)
+    {
+        if (grid.Markers.Count < 2 || result.Beats.Length < 2)
+            return;
+
+        var beats = result.Beats;
+        int beatIdx = 0;
+        double overallMaxDriftMs = 0;
+        int worstMarker = 0;
+
+        for (int mi = 0; mi < grid.Markers.Count - 1; mi++)
+        {
+            var marker = grid.Markers[mi];
+            var next = grid.Markers[mi + 1];
+            int n = marker.BeatsUntilNext ?? 0;
+            if (n <= 0) continue;
+
+            double markerPos = marker.PositionSeconds;
+            double nextPos = next.PositionSeconds;
+            double interval = (nextPos - markerPos) / n;
+            double implicitBpm = 60.0 / interval;
+
+            double maxDriftMs = 0;
+            for (int k = 0; k < n && beatIdx + k < beats.Length; k++)
+            {
+                double expected = markerPos + k * interval;
+                double actual = beats[beatIdx + k];
+                double driftMs = Math.Abs(actual - expected) * 1000;
+                if (driftMs > maxDriftMs)
+                    maxDriftMs = driftMs;
+            }
+
+            if (maxDriftMs > overallMaxDriftMs)
+            {
+                overallMaxDriftMs = maxDriftMs;
+                worstMarker = mi;
+            }
+
+            if (maxDriftMs > 15)  // Only log markers with notable drift
+                AppLogger.Log("Validation", $"  Marker {mi}: {implicitBpm:F2} BPM, {n} beats, max drift={maxDriftMs:F1}ms");
+
+            beatIdx += n;
+        }
+
+        AppLogger.Log("Validation", $"  Overall max drift: {overallMaxDriftMs:F1}ms at marker {worstMarker}");
     }
 
     private static BeatGrid ConvertToBeatGrid(AnalysisResult result)
