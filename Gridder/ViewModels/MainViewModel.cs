@@ -33,11 +33,21 @@ public partial class MainViewModel : ObservableObject
         _jsonExportService = jsonExportService;
         Playback = playbackViewModel;
 
-        // Sync playback position to waveform cursor
+        // Sync playback position to waveform cursor + auto-scroll
         Playback.PositionUpdated += pos =>
         {
             WaveformEditor.PlaybackPositionSeconds = pos;
+
+            if (Playback.IsPlaying)
+            {
+                var viewportDuration = WaveformEditor.ViewWidthPixels / WaveformEditor.PixelsPerSecond;
+                var targetScroll = pos - viewportDuration * 0.25;
+                WaveformEditor.ScrollPositionSeconds = Math.Clamp(targetScroll, 0, Math.Max(0, WaveformEditor.TotalDurationSeconds - viewportDuration));
+            }
         };
+
+        // Wire click-to-seek from waveform
+        WaveformEditor.SeekRequested += seconds => Playback.SeekTo(seconds);
     }
 
     [ObservableProperty]

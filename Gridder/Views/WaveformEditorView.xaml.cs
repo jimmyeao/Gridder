@@ -33,6 +33,23 @@ public partial class WaveformEditorView : ContentView
                     WaveformCanvas.InvalidateSurface();
                 }
             };
+
+            // Click-to-seek on waveform
+            var tap = new TapGestureRecognizer();
+            tap.Tapped += OnWaveformTapped;
+            WaveformCanvas.GestureRecognizers.Add(tap);
         }
+    }
+
+    private void OnWaveformTapped(object? sender, TappedEventArgs e)
+    {
+        if (_viewModel == null) return;
+
+        var position = e.GetPosition(WaveformCanvas);
+        if (position == null) return;
+
+        var time = _viewModel.XToTime((float)position.Value.X);
+        time = Math.Clamp(time, 0, _viewModel.TotalDurationSeconds);
+        _viewModel.RequestSeek(time);
     }
 }

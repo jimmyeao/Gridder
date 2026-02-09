@@ -144,4 +144,11 @@ public partial class WaveformEditorViewModel : ObservableObject
     /// </summary>
     public double XToTime(float x) =>
         x / PixelsPerSecond + ScrollPositionSeconds;
+
+    /// <summary>
+    /// Raised when the user clicks on the waveform to seek to a position.
+    /// </summary>
+    public event Action<double>? SeekRequested;
+
+    public void RequestSeek(double seconds) => SeekRequested?.Invoke(seconds);
 }
