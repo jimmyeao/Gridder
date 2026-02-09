@@ -53,13 +53,6 @@ def segment_tempo(beat_times: np.ndarray,
     segments = _bridge_outliers(segments, beat_times, max_drift_ms)
     print(f"  After bridging: {len(segments)} segments", file=sys.stderr)
 
-    # Step 3: Consolidate if all segments have similar BPMs.
-    # For constant-tempo tracks (EDM/electronic), the segmenter may create
-    # many segments because individual beat timing variations exceed the
-    # per-beat drift tolerance. But if all segments are within a narrow BPM
-    # range, the track is effectively constant-tempo and should be one segment.
-    segments = _consolidate_constant_tempo(segments, beat_times)
-
     # Log final segments with implicit BPMs (what Serato will actually use)
     print(f"  Final: {len(segments)} segment(s):", file=sys.stderr)
     for i, seg in enumerate(segments):
@@ -192,104 +185,6 @@ def _bridge_outliers(segments: list[dict], beat_times: np.ndarray,
             i += 1
 
     return result
-
-
-def _consolidate_constant_tempo(segments: list[dict], beat_times: np.ndarray,
-                                 bpm_range_pct: float = 1.5) -> list[dict]:
-    """
-    If all non-outlier segments have BPMs within a narrow range, consolidate
-    into a single segment. This handles constant-tempo EDM tracks where
-    per-beat timing variations create many segments.
-
-    Args:
-        bpm_range_pct: Max BPM deviation (%) from weighted average for a
-                       segment to be considered "normal" (not an outlier).
-                       At least 85% of beats must be in normal segments.
-    """
-    if len(segments) <= 1:
-        return segments
-
-    # Compute weighted average BPM
-    total_beats = sum(s["beat_count"] for s in segments)
-    if total_beats == 0:
-        return segments
-    weighted_bpm = sum(s["bpm"] * s["beat_count"] for s in segments) / total_beats
-
-    # Classify segments as normal or outlier based on BPM
-    normal_beats = 0
-    for seg in segments:
-        deviation_pct = abs(seg["bpm"] - weighted_bpm) / weighted_bpm * 100
-        if deviation_pct <= bpm_range_pct:
-            normal_beats += seg["beat_count"]
-
-    normal_ratio = normal_beats / total_beats
-
-    if normal_ratio < 0.85:
-        # Too many beats in outlier segments - not truly constant tempo
-        return segments
-
-    # Check Serato grid drift for only "normal" beats (skip outlier segments).
-    # For constant-tempo tracks with noisy detection, normal beat drift is low.
-    # For genuinely variable-tempo tracks (live drummer), drift is high.
-    first = segments[0]
-    last = segments[-1]
-    start_idx = first["start_beat_index"]
-    end_idx = last["end_beat_index"]
-    total_beat_count = end_idx - start_idx
-    total_span = beat_times[end_idx] - beat_times[start_idx]
-
-    if total_span <= 0 or total_beat_count <= 0:
-        return segments
-
-    # Identify beat indices that are in outlier segments
-    outlier_beats = set()
-    for seg in segments:
-        deviation_pct = abs(seg["bpm"] - weighted_bpm) / weighted_bpm * 100
-        if deviation_pct > bpm_range_pct:
-            for bi in range(seg["start_beat_index"], seg["end_beat_index"] + 1):
-                outlier_beats.add(bi)
-
-    # Compute max drift of normal beats against the consolidated grid
-    n = end_idx - start_idx
-    start_pos = beat_times[start_idx]
-    end_pos = beat_times[end_idx]
-    interval = (end_pos - start_pos) / n
-    max_drift = 0.0
-    for k in range(1, n):
-        beat_idx = start_idx + k
-        if beat_idx in outlier_beats:
-            continue
-        expected = start_pos + k * interval
-        actual = beat_times[beat_idx]
-        drift = abs(actual - expected)
-        if drift > max_drift:
-            max_drift = drift
-    max_drift_ms = max_drift * 1000
-
-    # Allow up to 40ms drift for consolidation (2x the per-segment tolerance)
-    # This accepts noisy detection (EDM tracks with ~10-20ms jitter) but
-    # rejects genuinely variable tempo (live drummers with 50ms+ drift)
-    if max_drift_ms > 40.0:
-        print(f"  Consolidation: BPM range OK but normal-beat drift={max_drift_ms:.1f}ms "
-              f"(>{40.0}ms), keeping {len(segments)} segments",
-              file=sys.stderr)
-        return segments
-
-    overall_bpm = 60.0 * total_beat_count / total_span
-
-    print(f"  Consolidating {len(segments)} segments into 1 "
-          f"({normal_ratio*100:.0f}% of beats within ±{bpm_range_pct}% "
-          f"of {weighted_bpm:.1f} BPM, drift={max_drift_ms:.1f}ms, "
-          f"overall={overall_bpm:.2f} BPM)",
-          file=sys.stderr)
-
-    return [{
-        "start_beat_index": first["start_beat_index"],
-        "end_beat_index": last["end_beat_index"],
-        "start_position": first["start_position"],
-        "bpm": round(float(overall_bpm), 2),
-        "beat_count": total_beat_count,
-    }]
 
 
 def _serato_max_drift_good_only(beat_times: np.ndarray, start_idx: int,

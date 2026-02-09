@@ -10,7 +10,22 @@
       "Bash(python:*)",
       "Bash(cmd /c \"type %LOCALAPPDATA%\\\\Gridder\\\\analysis.log 2>NUL\")",
       "Bash(findstr:*)",
-      "Bash(powershell:*)"
+      "Bash(powershell:*)",
+      "WebFetch(domain:www.ee.ic.ac.uk)",
+      "WebFetch(domain:web.archive.org)",
+      "WebFetch(domain:www.eecs.qmul.ac.uk)",
+      "WebFetch(domain:www.semanticscholar.org)",
+      "WebFetch(domain:www.audiolabs-erlangen.de)",
+      "WebFetch(domain:www-labs.iro.umontreal.ca)",
+      "WebFetch(domain:www.researchgate.net)",
+      "WebFetch(domain:musicinformationretrieval.com)",
+      "WebFetch(domain:www.iro.umontreal.ca)",
+      "WebFetch(domain:en.wikipedia.org)",
+      "WebFetch(domain:archive.gamedev.net)",
+      "WebFetch(domain:www.flipcode.com)",
+      "WebFetch(domain:www.parallelcube.com)",
+      "WebFetch(domain:madmom.readthedocs.io)",
+      "WebFetch(domain:tempobeatdownbeat.github.io)"
     ]
   }
 }
