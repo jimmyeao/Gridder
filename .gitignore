@@ -363,3 +363,13 @@ MigrationBackup/
 FodyWeavers.xsd
 /NUL
 /python/nul
+
+# PyInstaller build artifacts
+/python/build/
+/python/dist/
+/python/.venv/
+*.spec.bak
+
+# Publish and installer output
+/publish/
+/installer/Output/

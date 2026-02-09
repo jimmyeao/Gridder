@@ -28,6 +28,10 @@ public class PythonAnalysisService : IPythonAnalysisService
 
     public async Task<bool> CheckPythonAvailableAsync()
     {
+        // Standalone exe doesn't need Python at all
+        if (PythonLocator.FindStandaloneExe() != null)
+            return true;
+
         var python = await PythonLocator.FindPythonAsync();
         return python != null;
     }
@@ -39,42 +43,74 @@ public class PythonAnalysisService : IPythonAnalysisService
     {
         Log($"=== Analysis started for: {filePath}");
 
-        var pythonCommand = await PythonLocator.FindPythonAsync();
-        if (pythonCommand == null)
-        {
-            Log("ERROR: Python 3 not found on PATH");
-            throw new InvalidOperationException(
-                "Python 3 not found. Please install Python 3.10+ and ensure it's on your PATH.");
-        }
-        Log($"Python command: {pythonCommand}");
-
-        string pythonDir;
-        try
-        {
-            pythonDir = PythonLocator.GetAnalysisPackagePath();
-        }
-        catch (DirectoryNotFoundException ex)
-        {
-            Log($"ERROR: {ex.Message}");
-            throw new InvalidOperationException(ex.Message, ex);
-        }
-        Log($"Python package dir: {pythonDir}");
-
         progress?.Report("Starting analysis...");
 
-        // Build the process arguments
-        // Handle "py -3" style commands
-        var parts = pythonCommand.Split(' ', 2);
-        var fileName = parts[0];
-        var baseArgs = parts.Length > 1 ? parts[1] + " " : "";
-        var arguments = $"{baseArgs}-m gridder_analysis \"{filePath}\"";
-        Log($"Command: {fileName} {arguments}");
+        // Ensure ffmpeg is available (downloads on first use if needed)
+        string? ffmpegDir = null;
+        try
+        {
+            var ffmpegPath = await FfmpegProvider.EnsureAvailableAsync(progress, ct);
+            ffmpegDir = Path.GetDirectoryName(ffmpegPath);
+            Log($"ffmpeg: {ffmpegPath}");
+        }
+        catch (Exception ex)
+        {
+            Log($"ffmpeg warning: {ex.Message}");
+            // Non-fatal: analysis may still work for WAV/FLAC files without ffmpeg
+        }
+
+        // Prefer standalone exe (no Python install required)
+        var standaloneExe = PythonLocator.FindStandaloneExe();
+
+        string fileName;
+        string arguments;
+        string? workingDirectory = null;
+
+        if (standaloneExe != null)
+        {
+            fileName = standaloneExe;
+            arguments = $"\"{filePath}\"";
+            workingDirectory = Path.GetDirectoryName(standaloneExe);
+            Log($"Using standalone exe: {fileName} {arguments}");
+        }
+        else
+        {
+            // Fall back to system Python
+            var pythonCommand = await PythonLocator.FindPythonAsync();
+            if (pythonCommand == null)
+            {
+                Log("ERROR: Python 3 not found on PATH");
+                throw new InvalidOperationException(
+                    "Python 3 not found. Please install Python 3.10+ and ensure it's on your PATH, " +
+                    "or deploy the standalone gridder_analysis executable.");
+            }
+            Log($"Python command: {pythonCommand}");
+
+            string pythonDir;
+            try
+            {
+                pythonDir = PythonLocator.GetAnalysisPackagePath();
+            }
+            catch (DirectoryNotFoundException ex)
+            {
+                Log($"ERROR: {ex.Message}");
+                throw new InvalidOperationException(ex.Message, ex);
+            }
+            Log($"Python package dir: {pythonDir}");
+
+            var parts = pythonCommand.Split(' ', 2);
+            fileName = parts[0];
+            var baseArgs = parts.Length > 1 ? parts[1] + " " : "";
+            arguments = $"{baseArgs}-m gridder_analysis \"{filePath}\"";
+            workingDirectory = pythonDir;
+            Log($"Command: {fileName} {arguments}");
+        }
 
         var psi = new ProcessStartInfo
         {
             FileName = fileName,
             Arguments = arguments,
-            WorkingDirectory = pythonDir,
+            WorkingDirectory = workingDirectory,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
@@ -83,8 +119,16 @@ public class PythonAnalysisService : IPythonAnalysisService
             StandardErrorEncoding = Encoding.UTF8,
         };
 
-        // Set PYTHONPATH so the module can be found
-        psi.Environment["PYTHONPATH"] = pythonDir;
+        // Set PYTHONPATH only when using system Python (not needed for standalone)
+        if (standaloneExe == null && workingDirectory != null)
+            psi.Environment["PYTHONPATH"] = workingDirectory;
+
+        // Ensure ffmpeg is on the child process PATH (needed by madmom for MP3 decoding)
+        if (ffmpegDir != null)
+        {
+            var currentPath = psi.Environment.TryGetValue("PATH", out var p) ? p : Environment.GetEnvironmentVariable("PATH") ?? "";
+            psi.Environment["PATH"] = ffmpegDir + Path.PathSeparator + currentPath;
+        }
 
         using var process = new Process { StartInfo = psi };
 

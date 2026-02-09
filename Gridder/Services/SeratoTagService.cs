@@ -68,7 +68,14 @@ public class SeratoTagService : ISeratoTagService
         foreach (var frame in frames)
         {
             if (frame.Description == "Serato BeatGrid")
-                return frame.Data.Data;
+            {
+                var data = frame.Data.Data;
+                // Strip "Serato BeatGrid\0" header if present
+                var seratoHeader = "Serato BeatGrid\0"u8;
+                if (data.AsSpan().StartsWith(seratoHeader))
+                    data = data[seratoHeader.Length..];
+                return data;
+            }
         }
 
         return null;
@@ -85,8 +92,12 @@ public class SeratoTagService : ISeratoTagService
 
         var base64 = fields[0];
 
-        // Decode base64 (may contain linefeeds)
+        // Decode base64 (may contain linefeeds, and padding may be stripped)
         base64 = base64.Replace("\n", "").Replace("\r", "");
+        // Restore padding if missing (TagLib or Serato may strip trailing '=')
+        var padNeeded = (4 - base64.Length % 4) % 4;
+        if (padNeeded > 0)
+            base64 += new string('=', padNeeded);
         var fullData = Convert.FromBase64String(base64);
 
         // Strip the "application/octet-stream\0\0" prefix
@@ -99,6 +110,15 @@ public class SeratoTagService : ISeratoTagService
 
         var beatGridData = new byte[fullData.Length - prefixLen];
         Array.Copy(fullData, prefixLen, beatGridData, 0, beatGridData.Length);
+
+        // Serato's native format prepends "Serato BeatGrid\0" before the version byte.
+        // Our serializer doesn't write this header, but we must handle it when reading.
+        var seratoHeader = "Serato BeatGrid\0"u8;
+        if (beatGridData.AsSpan().StartsWith(seratoHeader))
+        {
+            beatGridData = beatGridData[seratoHeader.Length..];
+        }
+
         return beatGridData;
     }
 
@@ -113,13 +133,18 @@ public class SeratoTagService : ISeratoTagService
         foreach (var frame in existing)
             id3Tag.RemoveFrame(frame);
 
-        // Add new frame
+        // Add new frame with "Serato BeatGrid\0" header prefix (Serato native format)
+        var seratoHeader = Encoding.ASCII.GetBytes("Serato BeatGrid\0");
+        var payload = new byte[seratoHeader.Length + data.Length];
+        seratoHeader.CopyTo(payload, 0);
+        data.CopyTo(payload, seratoHeader.Length);
+
         var newFrame = new TagLib.Id3v2.AttachmentFrame
         {
             Type = TagLib.PictureType.NotAPicture,
             Description = "Serato BeatGrid",
             MimeType = "application/octet-stream",
-            Data = new TagLib.ByteVector(data),
+            Data = new TagLib.ByteVector(payload),
         };
         id3Tag.AddFrame(newFrame);
     }
@@ -128,13 +153,17 @@ public class SeratoTagService : ISeratoTagService
     {
         var xiph = (TagLib.Ogg.XiphComment)file.GetTag(TagLib.TagTypes.Xiph, true);
 
-        // Build the full payload: mime_type + null + null + binary_data
+        // Build the full payload: mime_type + \0\0 + "Serato BeatGrid\0" + binary_data
+        // The "Serato BeatGrid\0" header is part of Serato's native format.
         var mimeBytes = Encoding.ASCII.GetBytes("application/octet-stream");
-        var fullData = new byte[mimeBytes.Length + 2 + data.Length];
-        mimeBytes.CopyTo(fullData, 0);
-        fullData[mimeBytes.Length] = 0;
-        fullData[mimeBytes.Length + 1] = 0;
-        data.CopyTo(fullData, mimeBytes.Length + 2);
+        var seratoHeader = "Serato BeatGrid\0"u8;
+        var fullData = new byte[mimeBytes.Length + 2 + seratoHeader.Length + data.Length];
+        int pos = 0;
+        mimeBytes.CopyTo(fullData, pos); pos += mimeBytes.Length;
+        fullData[pos++] = 0;
+        fullData[pos++] = 0;
+        seratoHeader.CopyTo(fullData.AsSpan(pos)); pos += seratoHeader.Length;
+        data.CopyTo(fullData, pos);
 
         // Base64 encode with linefeeds every 72 chars
         var base64 = Convert.ToBase64String(fullData);

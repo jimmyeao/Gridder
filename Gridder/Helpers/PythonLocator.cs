@@ -5,6 +5,43 @@ namespace Gridder.Helpers;
 public static class PythonLocator
 {
     private static string? _cachedPythonPath;
+    private static string? _cachedStandaloneExe;
+
+    /// <summary>
+    /// Find the standalone gridder_analysis executable (PyInstaller build).
+    /// Returns the full path if found, null otherwise.
+    /// </summary>
+    public static string? FindStandaloneExe()
+    {
+        if (_cachedStandaloneExe != null)
+            return File.Exists(_cachedStandaloneExe) ? _cachedStandaloneExe : null;
+
+        var appDir = AppDomain.CurrentDomain.BaseDirectory;
+        var exeName = OperatingSystem.IsWindows() ? "gridder_analysis.exe" : "gridder_analysis";
+
+        string[] searchPaths =
+        [
+            // Published alongside app
+            Path.Combine(appDir, "gridder_analysis", exeName),
+            // Sibling directory
+            Path.GetFullPath(Path.Combine(appDir, "..", "gridder_analysis", exeName)),
+            // Dev: built in python/dist/
+            Path.GetFullPath(Path.Combine(appDir, "..", "..", "..", "..", "..", "python", "dist", "gridder_analysis", exeName)),
+            Path.GetFullPath(Path.Combine(appDir, "..", "..", "..", "..", "python", "dist", "gridder_analysis", exeName)),
+        ];
+
+        foreach (var path in searchPaths)
+        {
+            if (File.Exists(path))
+            {
+                _cachedStandaloneExe = Path.GetFullPath(path);
+                AppLogger.Log("Python", $"Found standalone exe: {_cachedStandaloneExe}");
+                return _cachedStandaloneExe;
+            }
+        }
+
+        return null;
+    }
 
     /// <summary>
     /// Find a usable Python 3 executable on this system.
