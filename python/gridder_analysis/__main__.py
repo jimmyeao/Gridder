@@ -48,8 +48,9 @@ def main():
     duration = len(y) / sr
     print(f"  Duration: {duration:.1f}s, Sample rate: {sr}Hz", file=sys.stderr)
 
-    # Step 2: Detect beats (includes HPSS percussive separation)
-    beat_times = detect_beats(audio_path, y, sr)
+    # Step 2: Detect beats (madmom primary, librosa fallback)
+    beat_times, detector = detect_beats(audio_path, y, sr)
+    print(f"  Beat detector: {detector}", file=sys.stderr)
 
     if len(beat_times) == 0:
         print("Warning: No beats detected!", file=sys.stderr)
@@ -138,7 +139,8 @@ def main():
     # A beat is likely a false detection if removing it makes the surrounding
     # interval match the track's tempo, while keeping it creates an interval
     # that's far off. This catches phantom beats from vocal transients, synth
-    # stabs, etc. that slip through HPSS.
+    # stabs, etc. that slip through HPSS. Also useful for madmom in
+    # quiet/breakdown sections where RNN activation produces noise.
     # NOTE: This MUST run before grid snapping, because false beats shift
     # indices and ruin the regression fit.
     if len(beat_times) >= 4:
@@ -268,6 +270,7 @@ def main():
         "file_path": audio_path,
         "sample_rate": sr,
         "duration_seconds": round(duration, 3),
+        "beat_detector": detector,
         "beats": [round(float(b), 4) for b in beat_times],
         "tempo_segments": tempo_segments,
         "waveform": waveform,

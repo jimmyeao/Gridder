@@ -15,6 +15,7 @@ Real drummer timing reference:
   - Good/standard (solid live):  3-4 BPM variation
   - Live/loose (no click track):  5+ BPM variation
 """
+from __future__ import annotations
 
 import sys
 import numpy as np

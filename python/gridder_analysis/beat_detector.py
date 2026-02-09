@@ -1,13 +1,20 @@
 """
-Beat detection using librosa with percussive source separation.
+Beat detection using madmom (primary) with librosa fallback.
 
-Uses Harmonic-Percussive Source Separation (HPSS) to isolate drum content
-before beat detection. This prevents vocals, guitar, synth etc. from
-confusing the beat tracker - especially important for songs with
-instrumental/vocal intros before the drums come in.
+Primary: madmom's DBN beat tracker uses RNN activation + Hidden Markov Model
+with transition_lambda to enforce tempo continuity. Far more accurate than
+librosa for DJ music.
+
+Fallback: librosa with Harmonic-Percussive Source Separation (HPSS) to
+isolate drum content before beat detection.
 """
 
+from __future__ import annotations
+
 import sys
+import time
+from typing import Optional
+
 import numpy as np
 import librosa
 
@@ -100,47 +107,86 @@ def detect_beats_librosa(y: np.ndarray, sr: int) -> np.ndarray:
     return beat_times
 
 
+def _ensure_ffmpeg_on_path():
+    """Ensure ffmpeg is on PATH (needed by madmom for MP3 loading)."""
+    import shutil
+    import os
+    if shutil.which('ffmpeg'):
+        return
+    # Check common winget install location
+    winget_dir = os.path.expandvars(
+        r'%LOCALAPPDATA%\Microsoft\WinGet\Packages')
+    if os.path.isdir(winget_dir):
+        for root, dirs, files in os.walk(winget_dir):
+            if 'ffmpeg.exe' in files:
+                os.environ['PATH'] = root + os.pathsep + os.environ['PATH']
+                print(f"  Added ffmpeg to PATH: {root}", file=sys.stderr)
+                return
+
+
 def detect_beats_madmom(audio_path: str) -> np.ndarray | None:
     """
     Detect beat positions using madmom's DBN beat tracker (more accurate
     for variable tempo). Returns None if madmom is not available.
     """
     try:
+        _ensure_ffmpeg_on_path()
         from madmom.features.beats import RNNBeatProcessor, DBNBeatTrackingProcessor
 
         print("  Using madmom DBN beat tracker...", file=sys.stderr)
 
+        t0 = time.time()
+
+        print("  Computing RNN beat activation...", file=sys.stderr)
+        act = RNNBeatProcessor()(audio_path)
+
+        print("  Running DBN beat tracking (transition_lambda=100)...",
+              file=sys.stderr)
         proc = DBNBeatTrackingProcessor(
             fps=100,
             min_bpm=40,
             max_bpm=240,
             transition_lambda=100,
         )
-        act = RNNBeatProcessor()(audio_path)
         beats = proc(act)
 
-        print(f"  Detected {len(beats)} beats via madmom", file=sys.stderr)
+        elapsed = time.time() - t0
+
+        if len(beats) >= 2:
+            intervals = np.diff(beats)
+            median_bpm = 60.0 / float(np.median(intervals))
+            print(f"  Detected {len(beats)} beats in {elapsed:.1f}s, "
+                  f"estimated tempo: {median_bpm:.1f} BPM",
+                  file=sys.stderr)
+        else:
+            print(f"  Detected {len(beats)} beats in {elapsed:.1f}s",
+                  file=sys.stderr)
+
         return beats
 
     except ImportError:
-        print("  madmom not available, using librosa", file=sys.stderr)
+        print("  madmom not available, falling back to librosa",
+              file=sys.stderr)
         return None
     except Exception as e:
-        print(f"  madmom failed: {e}, using librosa", file=sys.stderr)
+        print(f"  madmom failed: {e}, falling back to librosa",
+              file=sys.stderr)
         return None
 
 
-def detect_beats(audio_path: str, y: np.ndarray, sr: int) -> np.ndarray:
+def detect_beats(audio_path: str, y: np.ndarray, sr: int) -> tuple[np.ndarray, str]:
     """
     Detect beats using the best available method.
     Tries madmom first (better for variable tempo), falls back to librosa.
+
+    Returns (beat_times, detector_name) where detector_name is "madmom" or "librosa".
     """
     print("Detecting beats...", file=sys.stderr)
 
     # Try madmom first
     beats = detect_beats_madmom(audio_path)
     if beats is not None and len(beats) > 0:
-        return beats
+        return beats, "madmom"
 
     # Fall back to librosa with percussive separation
-    return detect_beats_librosa(y, sr)
+    return detect_beats_librosa(y, sr), "librosa"

@@ -8,11 +8,25 @@ public static class PythonLocator
 
     /// <summary>
     /// Find a usable Python 3 executable on this system.
+    /// Prefers the project venv (python/.venv) which has madmom installed.
     /// </summary>
     public static async Task<string?> FindPythonAsync()
     {
         if (_cachedPythonPath != null)
             return _cachedPythonPath;
+
+        // Check for project venv first (has madmom + all deps)
+        var venvPython = FindVenvPython();
+        if (venvPython != null)
+        {
+            var result = await TryPythonAsync(venvPython);
+            if (result != null)
+            {
+                _cachedPythonPath = result;
+                AppLogger.Log("Python", $"Using venv Python: {result}");
+                return result;
+            }
+        }
 
         // Candidates differ by platform
         string[] candidates;
@@ -41,11 +55,32 @@ public static class PythonLocator
             if (result != null)
             {
                 _cachedPythonPath = result;
+                AppLogger.Log("Python", $"Using system Python: {result}");
                 return result;
             }
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// Look for the project's Python venv which has madmom and all dependencies.
+    /// </summary>
+    private static string? FindVenvPython()
+    {
+        try
+        {
+            var pythonDir = GetAnalysisPackagePath();
+            var venvPython = OperatingSystem.IsWindows()
+                ? Path.Combine(pythonDir, ".venv", "Scripts", "python.exe")
+                : Path.Combine(pythonDir, ".venv", "bin", "python3");
+
+            return File.Exists(venvPython) ? venvPython : null;
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     private static async Task<string?> TryPythonAsync(string command)

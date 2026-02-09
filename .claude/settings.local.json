@@ -25,7 +25,29 @@
       "WebFetch(domain:www.flipcode.com)",
       "WebFetch(domain:www.parallelcube.com)",
       "WebFetch(domain:madmom.readthedocs.io)",
-      "WebFetch(domain:tempobeatdownbeat.github.io)"
+      "WebFetch(domain:tempobeatdownbeat.github.io)",
+      "Bash(pip show:*)",
+      "Bash(pip install:*)",
+      "Bash(where:*)",
+      "Bash(py -3.9:*)",
+      "Bash(py:*)",
+      "Bash(uv:*)",
+      "Bash(pip download:*)",
+      "Bash(git clone:*)",
+      "Bash(\"C:\\\\Users\\\\jimmy\\\\source\\\\repos\\\\Gridder\\\\python\\\\.venv\\\\Scripts\\\\python.exe\":*)",
+      "Bash(\"C:\\\\Users\\\\jimmy\\\\source\\\\repos\\\\Gridder\\\\python\\\\.venv\\\\Scripts\\\\python.exe\" -c \"import sysconfig; print\\(sysconfig.get_platform\\(\\)\\)\")",
+      "Bash(\"C:\\\\Users\\\\jimmy\\\\source\\\\repos\\\\Gridder\\\\python\\\\.venv\\\\Scripts\\\\python.exe\" -c \"from setuptools._distutils.util import get_platform; print\\(''setuptools:'', get_platform\\(\\)\\); import distutils.util; print\\(''stdlib:'', distutils.util.get_platform\\(\\)\\)\")",
+      "Bash(\"C:\\\\Users\\\\jimmy\\\\source\\\\repos\\\\Gridder\\\\python\\\\.venv\\\\Scripts\\\\python.exe\" -c:*)",
+      "Bash(set \"VSCMD_ARG_TGT_ARCH=x64\")",
+      "Bash(\"C:\\\\Users\\\\jimmy\\\\source\\\\repos\\\\Gridder\\\\python\\\\.venv\\\\Scripts\\\\python.exe\" -m pip install:*)",
+      "Bash(\"C:\\\\Users\\\\jimmy\\\\source\\\\repos\\\\Gridder\\\\python\\\\.venv\\\\Scripts\\\\python.exe\" -c \"\nfrom madmom.features.beats import RNNBeatProcessor, DBNBeatTrackingProcessor\nprint\\(''madmom imported successfully!''\\)\nprint\\(''RNNBeatProcessor:'', RNNBeatProcessor\\)\nprint\\(''DBNBeatTrackingProcessor:'', DBNBeatTrackingProcessor\\)\n\")",
+      "Bash(git submodule update:*)",
+      "Bash(\"C:\\\\Users\\\\jimmy\\\\source\\\\repos\\\\Gridder\\\\python\\\\.venv\\\\Scripts\\\\python.exe\" -m gridder_analysis \"C:\\\\Users\\\\jimmy\\\\Music\\\\DJ Library\\\\Tiesto - Red Lights.mp3\")",
+      "Bash(\"C:\\\\Users\\\\jimmy\\\\source\\\\repos\\\\Gridder\\\\python\\\\.venv\\\\Scripts\\\\python.exe\" -m gridder_analysis:*)",
+      "Bash(winget install:*)",
+      "Bash(where.exe:*)",
+      "Bash(dir /s /b \"C:\\\\Users\\\\jimmy\\\\AppData\\\\Local\\\\Microsoft\\\\WinGet\\\\Packages\\\\*ffmpeg.exe\")",
+      "Bash(cmd /c:*)"
     ]
   }
 }
