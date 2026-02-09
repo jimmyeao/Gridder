@@ -137,13 +137,15 @@ def detect_beats_madmom(audio_path: str) -> np.ndarray | None:
 
         t0 = time.time()
 
-        print("  Computing RNN beat activation...", file=sys.stderr)
-        act = RNNBeatProcessor()(audio_path)
+        fps = 100
 
-        print("  Running DBN beat tracking (transition_lambda=100)...",
+        print("  Computing RNN beat activation...", file=sys.stderr)
+        act = RNNBeatProcessor(fps=fps)(audio_path)
+
+        print(f"  Running DBN beat tracking (transition_lambda=100, fps={fps})...",
               file=sys.stderr)
         proc = DBNBeatTrackingProcessor(
-            fps=100,
+            fps=fps,
             min_bpm=40,
             max_bpm=240,
             transition_lambda=100,

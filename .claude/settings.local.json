@@ -47,7 +47,8 @@
       "Bash(winget install:*)",
       "Bash(where.exe:*)",
       "Bash(dir /s /b \"C:\\\\Users\\\\jimmy\\\\AppData\\\\Local\\\\Microsoft\\\\WinGet\\\\Packages\\\\*ffmpeg.exe\")",
-      "Bash(cmd /c:*)"
+      "Bash(cmd /c:*)",
+      "Bash(dir:*)"
     ]
   }
 }

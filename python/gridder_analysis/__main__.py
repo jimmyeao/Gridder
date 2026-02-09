@@ -197,10 +197,35 @@ def main():
         if iqr_ratio < 0.03:  # IQR < 3% of median = very constant tempo
             # Phase-match each beat to its expected beat number.
             # Only works for very regular tracks (IQR < 3%) where the
-            # median interval is accurate enough to assign correct numbers.
+            # interval estimate is accurate enough to assign correct numbers.
+            #
+            # At 100fps, frame quantization biases the median interval by up
+            # to ±10ms. Over hundreds of beats this compounds, making the
+            # expected beat count off by several. We try multiple candidate
+            # counts around the median-based estimate and pick the one where
+            # the most beats fall within 30ms of the grid.
+            total_span = float(beat_times[-1] - beat_times[0])
+            base_count = round(total_span / median_interval)
             first_beat = float(beat_times[0])
+
+            best_est = total_span / base_count if base_count > 0 else median_interval
+            best_good = 0
+            for delta in range(-5, 6):
+                c = base_count + delta
+                if c <= 0:
+                    continue
+                trial = total_span / c
+                nums = np.round((beat_times - first_beat) / trial).astype(int)
+                _, u_idx = np.unique(nums, return_index=True)
+                fitted = first_beat + nums[u_idx] * trial
+                n_good = int(np.sum(np.abs(beat_times[u_idx] - fitted) < 0.030))
+                if n_good > best_good:
+                    best_good = n_good
+                    best_est = trial
+
+            est_interval = best_est
             beat_numbers = np.round(
-                (beat_times - first_beat) / median_interval
+                (beat_times - first_beat) / est_interval
             ).astype(int)
 
             # Remove duplicates (two beats mapped to same number)
@@ -209,14 +234,19 @@ def main():
             clean_numbers = beat_numbers[unique_idx]
             n_dupes = len(beat_times) - len(clean_beats)
 
-            # Seed with robust median-based estimates
-            slope = median_interval
+            # Seed with trimmed-mean-based estimates
+            slope = est_interval
             intercept = float(np.median(clean_beats - clean_numbers * slope))
 
-            # First pass: identify good beats using median-based grid
+            # First pass: identify good beats using trimmed-mean grid
             fitted = intercept + clean_numbers * slope
             residuals = np.abs(clean_beats - fitted)
             good_mask = residuals < 0.030
+
+            print(f"  Grid snap seed: interval={slope:.6f}s ({60/slope:.2f} BPM), "
+                  f"intercept={intercept:.4f}, "
+                  f"initial good={int(np.sum(good_mask))}/{len(clean_beats)}",
+                  file=sys.stderr)
 
             # Iterative regression on good beats only
             for iteration in range(5):
@@ -231,6 +261,9 @@ def main():
                 fitted = intercept + clean_numbers * slope
                 residuals = np.abs(clean_beats - fitted)
                 new_mask = residuals < 0.030
+                print(f"  Grid snap iter {iteration}: slope={slope:.6f} ({60/slope:.2f} BPM), "
+                      f"good={int(np.sum(new_mask))}/{len(clean_beats)}",
+                      file=sys.stderr)
                 if np.array_equal(new_mask, good_mask):
                     break
                 good_mask = new_mask
@@ -238,7 +271,7 @@ def main():
             n_good = int(np.sum(good_mask))
             n_total = len(beat_times)
 
-            if n_good >= len(clean_beats) * 0.85 and slope > 0:
+            if n_good >= len(clean_beats) * 0.80 and slope > 0:
                 # Generate perfect grid from first to last good beat number
                 first_num = int(clean_numbers[good_mask][0])
                 last_num = int(clean_numbers[good_mask][-1])
