@@ -289,6 +289,15 @@ def main():
                       f"(IQR={iqr_ratio:.4f}), deferring to segmenter",
                       file=sys.stderr)
 
+    # Step 2f: Apply Serato alignment offset.
+    # Beat detection targets percussion onsets, but Serato's waveform display
+    # shows combined audio where peaks appear ~20-30ms after the drum transient.
+    # Shifting beats forward aligns markers with Serato's visual convention.
+    SERATO_ALIGNMENT_OFFSET = 0.020  # 20ms
+    beat_times = beat_times + SERATO_ALIGNMENT_OFFSET
+    print(f"  Applied +{SERATO_ALIGNMENT_OFFSET*1000:.0f}ms Serato alignment offset",
+          file=sys.stderr)
+
     # Step 3: Segment tempo
     print("Analyzing tempo segments...", file=sys.stderr)
     tempo_segments = segment_tempo(beat_times)

@@ -133,18 +133,17 @@ public class SeratoTagService : ISeratoTagService
         foreach (var frame in existing)
             id3Tag.RemoveFrame(frame);
 
-        // Add new frame with "Serato BeatGrid\0" header prefix (Serato native format)
-        var seratoHeader = Encoding.ASCII.GetBytes("Serato BeatGrid\0");
-        var payload = new byte[seratoHeader.Length + data.Length];
-        seratoHeader.CopyTo(payload, 0);
-        data.CopyTo(payload, seratoHeader.Length);
-
+        // Write raw binary data directly — the GEOB frame's description field
+        // already identifies this as "Serato BeatGrid", so no prefix is needed.
+        // (Serato itself does NOT include a "Serato BeatGrid\0" prefix in the
+        // GEOB data for MP3 files; unlike FLAC where it's required.)
         var newFrame = new TagLib.Id3v2.AttachmentFrame
         {
             Type = TagLib.PictureType.NotAPicture,
             Description = "Serato BeatGrid",
             MimeType = "application/octet-stream",
-            Data = new TagLib.ByteVector(payload),
+            TextEncoding = TagLib.StringType.Latin1, // Serato expects Latin1
+            Data = new TagLib.ByteVector(data),
         };
         id3Tag.AddFrame(newFrame);
     }

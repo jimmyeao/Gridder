@@ -48,7 +48,16 @@
       "Bash(where.exe:*)",
       "Bash(dir /s /b \"C:\\\\Users\\\\jimmy\\\\AppData\\\\Local\\\\Microsoft\\\\WinGet\\\\Packages\\\\*ffmpeg.exe\")",
       "Bash(cmd /c:*)",
-      "Bash(dir:*)"
+      "Bash(dir:*)",
+      "Bash(dotnet run:*)",
+      "Bash(python\\\\.venv\\\\Scripts\\\\python.exe:*)",
+      "Bash(\"python/.venv/Scripts/python.exe\":*)",
+      "Bash(\"C:\\\\Users\\\\jimmy\\\\source\\\\repos\\\\Gridder\\\\python\\\\.venv\\\\Scripts\\\\pip.exe\" install mutagen)",
+      "Bash(stat:*)",
+      "Bash(\"C:\\\\Users\\\\jimmy\\\\source\\\\repos\\\\Gridder\\\\python\\\\.venv\\\\Scripts\\\\python.exe\" -c \"\nfrom mutagen.mp3 import MP3\nf = MP3\\(r''F:\\\\Onedrive\\\\DJ Music\\\\Trance\\\\Sash! - Encore Une Fois \\(Original 12_\\) - 10A - 133.mp3''\\)\nprint\\(f''Encoder delay: {f.info.encoder_delay} samples''\\)\nprint\\(f''Encoder padding: {f.info.encoder_padding} samples''\\)\nprint\\(f''Sample rate: {f.info.sample_rate} Hz''\\)\nprint\\(f''Delay in ms: {f.info.encoder_delay / f.info.sample_rate * 1000:.2f} ms''\\)\nprint\\(f''Bitrate: {f.info.bitrate}''\\)\nprint\\(f''Encoder info: {f.info.encoder_info!r}''\\)\n\")",
+      "Bash(\"C:\\\\Users\\\\jimmy\\\\source\\\\repos\\\\Gridder\\\\python\\\\.venv\\\\Scripts\\\\python.exe\" -c \"\nfrom mutagen.mp3 import MP3\nf = MP3\\(r''F:\\\\Onedrive\\\\DJ Music\\\\Trance\\\\Sash! - Encore Une Fois \\(Original 12_\\) - 10A - 133.mp3''\\)\nprint\\(''MPEGInfo attributes:''\\)\nfor attr in dir\\(f.info\\):\n    if not attr.startswith\\(''_''\\):\n        print\\(f''  {attr} = {getattr\\(f.info, attr, \"\"?\"\"\\)}''\\)\n\")",
+      "Bash(\"C:\\\\Users\\\\jimmy\\\\source\\\\repos\\\\Gridder\\\\python\\\\.venv\\\\Scripts\\\\python.exe\" \"C:\\\\Users\\\\jimmy\\\\source\\\\repos\\\\Gridder\\\\measure_offset.py\")",
+      "Bash(del:*)"
     ]
   }
 }
