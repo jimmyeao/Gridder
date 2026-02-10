@@ -27,6 +27,9 @@ public partial class AudioTrack : ObservableObject
     [ObservableProperty]
     private double _analysisProgress;
 
+    [ObservableProperty]
+    private double? _firstBeatOverride;
+
     public string DisplayName => string.IsNullOrWhiteSpace(Title)
         ? Path.GetFileNameWithoutExtension(FilePath)
         : Title;

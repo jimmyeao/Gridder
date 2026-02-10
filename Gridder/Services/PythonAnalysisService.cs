@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using Gridder.Helpers;
@@ -39,7 +40,8 @@ public class PythonAnalysisService : IPythonAnalysisService
     public async Task<AnalysisResult> AnalyzeTrackAsync(
         string filePath,
         IProgress<string>? progress = null,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        double? firstBeatSeconds = null)
     {
         Log($"=== Analysis started for: {filePath}");
 
@@ -66,10 +68,14 @@ public class PythonAnalysisService : IPythonAnalysisService
         string arguments;
         string? workingDirectory = null;
 
+        var firstBeatArg = firstBeatSeconds.HasValue
+            ? $" --first-beat {firstBeatSeconds.Value.ToString("F4", CultureInfo.InvariantCulture)}"
+            : "";
+
         if (standaloneExe != null)
         {
             fileName = standaloneExe;
-            arguments = $"\"{filePath}\"";
+            arguments = $"\"{filePath}\"{firstBeatArg}";
             workingDirectory = Path.GetDirectoryName(standaloneExe);
             Log($"Using standalone exe: {fileName} {arguments}");
         }
@@ -101,7 +107,7 @@ public class PythonAnalysisService : IPythonAnalysisService
             var parts = pythonCommand.Split(' ', 2);
             fileName = parts[0];
             var baseArgs = parts.Length > 1 ? parts[1] + " " : "";
-            arguments = $"{baseArgs}-m gridder_analysis \"{filePath}\"";
+            arguments = $"{baseArgs}-m gridder_analysis \"{filePath}\"{firstBeatArg}";
             workingDirectory = pythonDir;
             Log($"Command: {fileName} {arguments}");
         }

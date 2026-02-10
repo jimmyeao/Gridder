@@ -1,22 +1,26 @@
 """
 Entry point for the Gridder analysis engine.
 
-Usage: python -m gridder_analysis <audio_file_path>
+Usage: python -m gridder_analysis <audio_file_path> [--first-beat SECONDS]
 
 Outputs JSON to stdout with beat positions, tempo segments, and waveform data.
 Progress messages go to stderr.
 """
 
+import argparse
 import json
 import sys
 import os
 
 def main():
-    if len(sys.argv) != 2:
-        print("Usage: python -m gridder_analysis <audio_file.mp3|flac>", file=sys.stderr)
-        sys.exit(1)
+    parser = argparse.ArgumentParser(description="Gridder beat analysis engine")
+    parser.add_argument("audio_path", help="Path to audio file (MP3 or FLAC)")
+    parser.add_argument("--first-beat", type=float, default=None,
+                        help="Override first beat position in seconds")
+    args = parser.parse_args()
 
-    audio_path = sys.argv[1]
+    audio_path = args.audio_path
+    first_beat_override = args.first_beat
 
     if not os.path.exists(audio_path):
         print(f"Error: File not found: {audio_path}", file=sys.stderr)
@@ -56,84 +60,116 @@ def main():
         print("Warning: No beats detected!", file=sys.stderr)
         beat_times = np.array([0.0])
 
-    # Step 2b: Trim weak leading beats (quiet percussion/hi-hat intros).
-    # Many tracks have a quiet hi-hat or percussion pattern before the
-    # actual kick drum comes in. librosa detects beats on these, but
-    # the grid should start at the first strong drum beat.
-    if len(beat_times) >= 4:
-        window = int(0.03 * sr)  # 30ms window around each beat
-        beat_rms = np.array([
-            float(np.sqrt(np.mean(
-                y[max(0, int(b * sr) - window):int(b * sr) + window] ** 2
-            ))) for b in beat_times
-        ])
+    # Step 2a (override): If user specified --first-beat, snap to nearest
+    # detected beat (or insert) and discard everything before it.
+    if first_beat_override is not None:
+        # Find nearest detected beat within 50ms
+        distances = np.abs(beat_times - first_beat_override)
+        nearest_idx = int(np.argmin(distances))
+        nearest_dist = float(distances[nearest_idx])
+        nearest_pos = float(beat_times[nearest_idx])
 
-        # Use the median RMS of the louder half of beats as reference
-        # (avoids being skewed by quiet intro beats)
-        sorted_rms = np.sort(beat_rms)
-        upper_half = sorted_rms[len(sorted_rms) // 2:]
-        strong_beat_rms = float(np.median(upper_half))
-
-        # Threshold: a beat must be at least 20% of the typical strong
-        # beat energy to count. This filters out quiet hi-hats/percussion
-        # while keeping real kick/snare hits.
-        energy_threshold = strong_beat_rms * 0.20
-
-        first_strong = 0
-        for i, rms in enumerate(beat_rms):
-            if rms >= energy_threshold:
-                first_strong = i
-                break
-
-        if first_strong > 0:
-            trimmed = beat_times[:first_strong]
-            beat_times = beat_times[first_strong:]
-            print(f"  Trimmed {len(trimmed)} weak intro beat(s) "
-                  f"(energy < {energy_threshold:.4f}, threshold={strong_beat_rms:.4f})",
+        if nearest_dist <= 0.050:
+            print(f"  First beat override: {first_beat_override:.3f}s "
+                  f"(nearest detected: {nearest_pos:.3f}s, dist={nearest_dist*1000:.1f}ms)",
                   file=sys.stderr)
-            print(f"  First beat: {float(beat_times[0]):.3f}s "
-                  f"(was {float(trimmed[0]):.3f}s)", file=sys.stderr)
-
-    # Step 2c: Extrapolate first beats if the tracker missed them.
-    # librosa's beat tracker often skips the first 1-2 beats because the
-    # onset envelope hasn't built up enough energy. Keep extrapolating
-    # backward until we reach the start of the audio or a quiet region.
-    if len(beat_times) >= 2:
-        n_check = min(8, len(beat_times) - 1)
-        median_interval = float(np.median(np.diff(beat_times[:n_check + 1])))
-
-        # Use the RMS of the first detected strong beat as our threshold
-        # for extrapolation - only extrapolate into regions with similar energy
-        first_beat_sample = int(beat_times[0] * sr)
-        ext_window = int(0.03 * sr)
-        first_beat_rms = float(np.sqrt(np.mean(
-            y[max(0, first_beat_sample - ext_window):first_beat_sample + ext_window] ** 2
-        )))
-        extrap_threshold = first_beat_rms * 0.25
-
-        original_first = float(beat_times[0])
-        prepend_count = 0
-
-        while True:
-            extrapolated = float(beat_times[0]) - median_interval
-            if extrapolated < 0:
-                break
-
-            sample_idx = int(extrapolated * sr)
-            if sample_idx >= len(y):
-                break
-            region = y[max(0, sample_idx - ext_window):sample_idx + ext_window]
-            rms = float(np.sqrt(np.mean(region ** 2)))
-            if rms < extrap_threshold:
-                break  # Too quiet - would be in the intro section
-
-            beat_times = np.insert(beat_times, 0, extrapolated)
-            prepend_count += 1
-
-        if prepend_count > 0:
-            print(f"  Prepended {prepend_count} beat(s): first beat "
-                  f"{original_first:.3f}s -> {float(beat_times[0]):.3f}s",
+            beat_times = beat_times[nearest_idx:]
+        else:
+            # No detected beat close enough — insert user's position
+            print(f"  First beat override: {first_beat_override:.3f}s "
+                  f"(inserted, nearest was {nearest_pos:.3f}s at {nearest_dist*1000:.1f}ms)",
                   file=sys.stderr)
+            beat_times = beat_times[beat_times >= first_beat_override]
+            beat_times = np.insert(beat_times, 0, first_beat_override)
+
+        n_discarded = len(distances) - len(beat_times)
+        if n_discarded > 0:
+            print(f"  Discarded {n_discarded} beat(s) before override position",
+                  file=sys.stderr)
+
+        # Skip steps 2b (weak beat trimming) and 2c (extrapolation)
+        # — the user explicitly chose the start position
+        print("  Skipping weak-beat trimming and extrapolation (user override)",
+              file=sys.stderr)
+    else:
+        # Step 2b: Trim weak leading beats (quiet percussion/hi-hat intros).
+        # Many tracks have a quiet hi-hat or percussion pattern before the
+        # actual kick drum comes in. librosa detects beats on these, but
+        # the grid should start at the first strong drum beat.
+        if len(beat_times) >= 4:
+            window = int(0.03 * sr)  # 30ms window around each beat
+            beat_rms = np.array([
+                float(np.sqrt(np.mean(
+                    y[max(0, int(b * sr) - window):int(b * sr) + window] ** 2
+                ))) for b in beat_times
+            ])
+
+            # Use the median RMS of the louder half of beats as reference
+            # (avoids being skewed by quiet intro beats)
+            sorted_rms = np.sort(beat_rms)
+            upper_half = sorted_rms[len(sorted_rms) // 2:]
+            strong_beat_rms = float(np.median(upper_half))
+
+            # Threshold: a beat must be at least 20% of the typical strong
+            # beat energy to count. This filters out quiet hi-hats/percussion
+            # while keeping real kick/snare hits.
+            energy_threshold = strong_beat_rms * 0.20
+
+            first_strong = 0
+            for i, rms in enumerate(beat_rms):
+                if rms >= energy_threshold:
+                    first_strong = i
+                    break
+
+            if first_strong > 0:
+                trimmed = beat_times[:first_strong]
+                beat_times = beat_times[first_strong:]
+                print(f"  Trimmed {len(trimmed)} weak intro beat(s) "
+                      f"(energy < {energy_threshold:.4f}, threshold={strong_beat_rms:.4f})",
+                      file=sys.stderr)
+                print(f"  First beat: {float(beat_times[0]):.3f}s "
+                      f"(was {float(trimmed[0]):.3f}s)", file=sys.stderr)
+
+        # Step 2c: Extrapolate first beats if the tracker missed them.
+        # librosa's beat tracker often skips the first 1-2 beats because the
+        # onset envelope hasn't built up enough energy. Keep extrapolating
+        # backward until we reach the start of the audio or a quiet region.
+        if len(beat_times) >= 2:
+            n_check = min(8, len(beat_times) - 1)
+            median_interval = float(np.median(np.diff(beat_times[:n_check + 1])))
+
+            # Use the RMS of the first detected strong beat as our threshold
+            # for extrapolation - only extrapolate into regions with similar energy
+            first_beat_sample = int(beat_times[0] * sr)
+            ext_window = int(0.03 * sr)
+            first_beat_rms = float(np.sqrt(np.mean(
+                y[max(0, first_beat_sample - ext_window):first_beat_sample + ext_window] ** 2
+            )))
+            extrap_threshold = first_beat_rms * 0.25
+
+            original_first = float(beat_times[0])
+            prepend_count = 0
+
+            while True:
+                extrapolated = float(beat_times[0]) - median_interval
+                if extrapolated < 0:
+                    break
+
+                sample_idx = int(extrapolated * sr)
+                if sample_idx >= len(y):
+                    break
+                region = y[max(0, sample_idx - ext_window):sample_idx + ext_window]
+                rms = float(np.sqrt(np.mean(region ** 2)))
+                if rms < extrap_threshold:
+                    break  # Too quiet - would be in the intro section
+
+                beat_times = np.insert(beat_times, 0, extrapolated)
+                prepend_count += 1
+
+            if prepend_count > 0:
+                print(f"  Prepended {prepend_count} beat(s): first beat "
+                      f"{original_first:.3f}s -> {float(beat_times[0]):.3f}s",
+                      file=sys.stderr)
 
     # Step 2d: Clean out false beat detections.
     # A beat is likely a false detection if removing it makes the surrounding

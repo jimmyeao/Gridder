@@ -152,7 +152,8 @@ public partial class MainViewModel : ObservableObject
 
         try
         {
-            var result = await _pythonAnalysisService.AnalyzeTrackAsync(track.FilePath, progress);
+            var result = await _pythonAnalysisService.AnalyzeTrackAsync(
+                track.FilePath, progress, firstBeatSeconds: track.FirstBeatOverride);
 
             // Convert analysis result to BeatGrid
             AppLogger.Log("Analysis", $"Track: {track.FileName}");
@@ -194,6 +195,7 @@ public partial class MainViewModel : ObservableObject
 
             track.AnalysisStatus = AnalysisStatus.Analyzed;
             track.AnalysisProgress = 0;
+            track.FirstBeatOverride = null; // incorporated into new grid
             AnalyzedCount = Tracks.Count(t => t.AnalysisStatus == AnalysisStatus.Analyzed);
 
             // Load into waveform editor and playback
@@ -362,19 +364,26 @@ public partial class MainViewModel : ObservableObject
         _analyzeAllCts?.Cancel();
     }
 
-    partial void OnSelectedTrackChanged(AudioTrack? value)
+    partial void OnSelectedTrackChanged(AudioTrack? oldValue, AudioTrack? newValue)
     {
         AnalyzeSelectedTrackCommand.NotifyCanExecuteChanged();
+        SetFirstBeatCommand.NotifyCanExecuteChanged();
 
-        if (value != null)
+        // Track AnalysisStatus changes to update SetFirstBeat CanExecute
+        if (oldValue != null)
+            oldValue.PropertyChanged -= OnSelectedTrackPropertyChanged;
+        if (newValue != null)
+            newValue.PropertyChanged += OnSelectedTrackPropertyChanged;
+
+        if (newValue != null)
         {
-            StatusMessage = $"Selected: {value.DisplayArtist} - {value.DisplayName}";
+            StatusMessage = $"Selected: {newValue.DisplayArtist} - {newValue.DisplayName}";
 
             // If already analyzed, load waveform editor and playback
-            if (value.AnalysisStatus == AnalysisStatus.Analyzed)
+            if (newValue.AnalysisStatus == AnalysisStatus.Analyzed)
             {
-                WaveformEditor.LoadTrack(value);
-                _ = Playback.LoadTrackAsync(value.FilePath, value.BeatGrid);
+                WaveformEditor.LoadTrack(newValue);
+                _ = Playback.LoadTrackAsync(newValue.FilePath, newValue.BeatGrid);
             }
         }
     }
@@ -384,11 +393,57 @@ public partial class MainViewModel : ObservableObject
         AnalyzeSelectedTrackCommand.NotifyCanExecuteChanged();
         AnalyzeAllCommand.NotifyCanExecuteChanged();
         CancelAnalyzeAllCommand.NotifyCanExecuteChanged();
+        SaveAllCommand.NotifyCanExecuteChanged();
     }
 
     partial void OnTrackCountChanged(int value)
     {
         AnalyzeAllCommand.NotifyCanExecuteChanged();
+    }
+
+    partial void OnAnalyzedCountChanged(int value)
+    {
+        SaveAllCommand.NotifyCanExecuteChanged();
+    }
+
+    private void OnSelectedTrackPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(AudioTrack.AnalysisStatus))
+            SetFirstBeatCommand.NotifyCanExecuteChanged();
+    }
+
+    private bool CanSetFirstBeat() =>
+        SelectedTrack != null && SelectedTrack.AnalysisStatus == AnalysisStatus.Analyzed;
+
+    [RelayCommand(CanExecute = nameof(CanSetFirstBeat))]
+    private void SetFirstBeat()
+    {
+        if (SelectedTrack == null) return;
+
+        var pos = Playback.CurrentPositionSeconds;
+
+        // Toggle: if already set at the same position (within 50ms), clear it
+        if (SelectedTrack.FirstBeatOverride.HasValue &&
+            Math.Abs(SelectedTrack.FirstBeatOverride.Value - pos) < 0.05)
+        {
+            SelectedTrack.FirstBeatOverride = null;
+            StatusMessage = "First beat override cleared";
+        }
+        else
+        {
+            SelectedTrack.FirstBeatOverride = pos;
+            StatusMessage = $"First beat set at {pos:F2}s \u2014 click Analyze to re-process";
+        }
+    }
+
+    [RelayCommand]
+    private void ClearFirstBeat()
+    {
+        if (SelectedTrack != null)
+        {
+            SelectedTrack.FirstBeatOverride = null;
+            StatusMessage = "First beat override cleared";
+        }
     }
 
     [RelayCommand]
@@ -426,6 +481,50 @@ public partial class MainViewModel : ObservableObject
             AppLogger.Log("Save", $"  Save FAILED: {ex}");
             StatusMessage = $"Error saving: {ex.Message}";
         }
+    }
+
+    private bool CanSaveAll() => !IsAnalyzing && Tracks.Any(t =>
+        t.AnalysisStatus == AnalysisStatus.Analyzed && t.BeatGrid?.Markers.Count > 0);
+
+    [RelayCommand(CanExecute = nameof(CanSaveAll))]
+    private async Task SaveAllAsync()
+    {
+        var tracksToSave = Tracks
+            .Where(t => t.AnalysisStatus == AnalysisStatus.Analyzed && t.BeatGrid?.Markers.Count > 0)
+            .ToList();
+
+        if (tracksToSave.Count == 0)
+        {
+            StatusMessage = "No analyzed tracks to save.";
+            return;
+        }
+
+        int saved = 0;
+        int failed = 0;
+
+        foreach (var track in tracksToSave)
+        {
+            try
+            {
+                var grid = track.BeatGrid!;
+                AppLogger.Log("SaveAll", $"Saving beatgrid to {track.FileName}");
+                await Task.Run(() => _seratoTagService.WriteBeatGrid(track.FilePath, grid));
+                await Task.Run(() => _seratoTagService.SetBpmLock(track.FilePath, true));
+                track.HasExistingBeatGrid = true;
+                saved++;
+                StatusMessage = $"Saving {saved}/{tracksToSave.Count}...";
+            }
+            catch (Exception ex)
+            {
+                failed++;
+                AppLogger.Log("SaveAll", $"  Save FAILED for {track.FileName}: {ex}");
+            }
+        }
+
+        WithBeatGridCount = Tracks.Count(t => t.HasExistingBeatGrid);
+        StatusMessage = failed == 0
+            ? $"Saved {saved} beatgrid(s) to file."
+            : $"Saved {saved} beatgrid(s), {failed} failed.";
     }
 
     [RelayCommand]

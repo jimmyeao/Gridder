@@ -37,7 +37,7 @@
                     Margin="0,0,0,8" />
 
             <!-- Action Buttons -->
-            <Grid Grid.Row="1" ColumnDefinitions="*,*" RowDefinitions="Auto,Auto,Auto" ColumnSpacing="4" RowSpacing="4"
+            <Grid Grid.Row="1" ColumnDefinitions="*,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto" ColumnSpacing="4" RowSpacing="4"
                   Margin="0,0,0,4">
                 <Button Grid.Column="0" Grid.Row="0"
                         Text="Analyze"
@@ -74,6 +74,24 @@
                         Command="{Binding CancelAnalyzeAllCommand}"
                         Pressed="OnButtonPressed" Released="OnButtonReleased"
                         BackgroundColor="#1e1e2e" TextColor="#ff4444"
+                        FontSize="12" Padding="4" />
+                <Button Grid.Column="0" Grid.Row="3"
+                        Text="Save All"
+                        Command="{Binding SaveAllCommand}"
+                        Pressed="OnButtonPressed" Released="OnButtonReleased"
+                        BackgroundColor="#1e1e2e" TextColor="#00ff88"
+                        FontSize="12" FontAttributes="Bold" Padding="4" />
+                <Button Grid.Column="0" Grid.Row="4"
+                        Text="Set 1st Beat"
+                        Command="{Binding SetFirstBeatCommand}"
+                        Pressed="OnButtonPressed" Released="OnButtonReleased"
+                        BackgroundColor="#1e1e2e" TextColor="#ffcc00"
+                        FontSize="12" FontAttributes="Bold" Padding="4" />
+                <Button Grid.Column="1" Grid.Row="4"
+                        Text="Clear 1st Beat"
+                        Command="{Binding ClearFirstBeatCommand}"
+                        Pressed="OnButtonPressed" Released="OnButtonReleased"
+                        BackgroundColor="#1e1e2e" TextColor="#aaaaaa"
                         FontSize="12" Padding="4" />
             </Grid>
 

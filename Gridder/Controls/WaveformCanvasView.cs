@@ -16,6 +16,7 @@ public class WaveformCanvasView : SKCanvasView
     private static readonly SKColor DownbeatLineColor = new(0, 212, 255, 140);  // cyan
     private static readonly SKColor SegmentLineColor = new(255, 100, 50, 200);  // orange-red
     private static readonly SKColor SelectedBeatColor = new(255, 200, 0);       // yellow
+    private static readonly SKColor FirstBeatOverrideColor = new(255, 200, 0, 200); // gold
     private static readonly SKColor PlaybackCursorColor = new(255, 50, 50);     // red
     private static readonly SKColor TimeRulerColor = new(80, 80, 80);
     private static readonly SKColor TimeRulerTextColor = new(120, 120, 120);
@@ -46,6 +47,7 @@ public class WaveformCanvasView : SKCanvasView
         DrawCenterLine(canvas, waveformArea);
         DrawWaveform(canvas, waveformArea);
         DrawBeatMarkers(canvas, waveformArea);
+        DrawFirstBeatMarker(canvas, waveformArea);
         DrawPlaybackCursor(canvas, waveformArea);
     }
 
@@ -191,6 +193,36 @@ public class WaveformCanvasView : SKCanvasView
 
             canvas.DrawLine(x, area.Top, x, area.Bottom, paint);
         }
+    }
+
+    private void DrawFirstBeatMarker(SKCanvas canvas, SKRect area)
+    {
+        var overridePos = ViewModel?.Track?.FirstBeatOverride;
+        if (overridePos == null || ViewModel == null) return;
+
+        double time = overridePos.Value;
+        if (time < ViewModel.ViewStartSeconds || time > ViewModel.ViewEndSeconds) return;
+
+        float x = ViewModel.TimeToX(time);
+
+        using var paint = new SKPaint
+        {
+            Color = FirstBeatOverrideColor,
+            StrokeWidth = 2,
+            IsAntialias = true,
+            PathEffect = SKPathEffect.CreateDash([6, 4], 0),
+        };
+
+        canvas.DrawLine(x, area.Top, x, area.Bottom, paint);
+
+        // Draw "1" label at top
+        using var labelPaint = new SKPaint
+        {
+            Color = FirstBeatOverrideColor,
+            IsAntialias = true,
+        };
+        using var labelFont = new SKFont(SKTypeface.Default, 12) { Embolden = true };
+        canvas.DrawText("1", x + 3, area.Top + 14, SKTextAlign.Left, labelFont, labelPaint);
     }
 
     private void DrawPlaybackCursor(SKCanvas canvas, SKRect area)
