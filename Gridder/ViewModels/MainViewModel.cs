@@ -258,9 +258,10 @@ public partial class MainViewModel : ObservableObject
             }
 
             await Task.Run(() => _seratoTagService.WriteBeatGrid(SelectedTrack.FilePath, grid));
+            await Task.Run(() => _seratoTagService.SetBpmLock(SelectedTrack.FilePath, true));
             SelectedTrack.HasExistingBeatGrid = true;
             WithBeatGridCount = Tracks.Count(t => t.HasExistingBeatGrid);
-            AppLogger.Log("Save", "  Save successful");
+            AppLogger.Log("Save", "  Save successful (BPMLOCK set)");
             StatusMessage = $"Saved beatgrid to {SelectedTrack.FileName}";
         }
         catch (Exception ex)
