@@ -14,6 +14,7 @@ public partial class MainViewModel : ObservableObject
     private readonly IPythonAnalysisService _pythonAnalysisService;
     private readonly ISeratoTagService _seratoTagService;
     private readonly JsonExportService _jsonExportService;
+    private CancellationTokenSource? _analyzeAllCts;
 
     public WaveformEditorViewModel WaveformEditor { get; } = new();
     public PlaybackViewModel Playback { get; }
@@ -137,10 +138,16 @@ public partial class MainViewModel : ObservableObject
         IsAnalyzing = true;
         track.AnalysisStatus = AnalysisStatus.Analyzing;
         track.AnalysisError = null;
+        track.AnalysisProgress = 0;
 
         var progress = new Progress<string>(msg =>
         {
-            MainThread.BeginInvokeOnMainThread(() => StatusMessage = msg);
+            MainThread.BeginInvokeOnMainThread(() =>
+            {
+                StatusMessage = msg;
+                var p = MapProgressMessage(msg);
+                if (p >= 0) track.AnalysisProgress = p;
+            });
         });
 
         try
@@ -186,6 +193,7 @@ public partial class MainViewModel : ObservableObject
             }
 
             track.AnalysisStatus = AnalysisStatus.Analyzed;
+            track.AnalysisProgress = 0;
             AnalyzedCount = Tracks.Count(t => t.AnalysisStatus == AnalysisStatus.Analyzed);
 
             // Load into waveform editor and playback
@@ -202,6 +210,7 @@ public partial class MainViewModel : ObservableObject
         {
             track.AnalysisStatus = AnalysisStatus.Error;
             track.AnalysisError = ex.Message;
+            track.AnalysisProgress = 0;
             StatusMessage = $"Analysis failed: {ex.Message}";
         }
         finally
@@ -211,6 +220,147 @@ public partial class MainViewModel : ObservableObject
     }
 
     private bool CanAnalyze() => SelectedTrack != null && !IsAnalyzing;
+
+    private bool CanAnalyzeAll() => !IsAnalyzing && Tracks.Count > 0;
+
+    [RelayCommand(CanExecute = nameof(CanAnalyzeAll))]
+    private async Task AnalyzeAllAsync()
+    {
+        var tracksToAnalyze = Tracks
+            .Where(t => t.AnalysisStatus != AnalysisStatus.Analyzed)
+            .ToList();
+
+        if (tracksToAnalyze.Count == 0)
+        {
+            StatusMessage = "All tracks are already analyzed.";
+            return;
+        }
+
+        IsAnalyzing = true;
+        _analyzeAllCts = new CancellationTokenSource();
+        var ct = _analyzeAllCts.Token;
+
+        int completed = 0;
+        int failed = 0;
+        int total = tracksToAnalyze.Count;
+        int concurrency = Math.Max(1, Environment.ProcessorCount / 2);
+        var semaphore = new SemaphoreSlim(concurrency);
+
+        StatusMessage = $"Analyzing 0/{total}...";
+
+        try
+        {
+            var tasks = tracksToAnalyze.Select(async track =>
+            {
+                ct.ThrowIfCancellationRequested();
+                await semaphore.WaitAsync(ct);
+                try
+                {
+                    ct.ThrowIfCancellationRequested();
+
+                    MainThread.BeginInvokeOnMainThread(() =>
+                    {
+                        track.AnalysisStatus = AnalysisStatus.Analyzing;
+                        track.AnalysisProgress = 0;
+                    });
+
+                    var progress = new Progress<string>(msg =>
+                    {
+                        var p = MapProgressMessage(msg);
+                        if (p >= 0)
+                            MainThread.BeginInvokeOnMainThread(() => track.AnalysisProgress = p);
+                    });
+
+                    var result = await _pythonAnalysisService.AnalyzeTrackAsync(track.FilePath, progress, ct);
+
+                    var beatGrid = ConvertToBeatGrid(result);
+                    track.BeatGrid = beatGrid;
+                    ValidateBeatGridAccuracy(beatGrid, result);
+
+                    if (result.Waveform != null)
+                    {
+                        track.WaveformData = new WaveformData
+                        {
+                            SamplesPerPixel = result.Waveform.SamplesPerPixel,
+                            PeaksPositive = result.Waveform.PeaksPositive,
+                            PeaksNegative = result.Waveform.PeaksNegative,
+                            OnsetEnvelope = result.Waveform.OnsetEnvelope,
+                            DurationSeconds = result.DurationSeconds,
+                            SampleRate = result.SampleRate,
+                        };
+                    }
+
+                    MainThread.BeginInvokeOnMainThread(() =>
+                    {
+                        track.AnalysisStatus = AnalysisStatus.Analyzed;
+                        track.AnalysisProgress = 0;
+                    });
+
+                    int done = Interlocked.Increment(ref completed);
+                    MainThread.BeginInvokeOnMainThread(() =>
+                        StatusMessage = $"Analyzing {done}/{total}...");
+                }
+                catch (OperationCanceledException)
+                {
+                    MainThread.BeginInvokeOnMainThread(() =>
+                    {
+                        track.AnalysisStatus = AnalysisStatus.NotAnalyzed;
+                        track.AnalysisProgress = 0;
+                    });
+                    throw; // propagate so Task.WhenAll sees cancellation
+                }
+                catch (Exception ex)
+                {
+                    Interlocked.Increment(ref failed);
+                    MainThread.BeginInvokeOnMainThread(() =>
+                    {
+                        track.AnalysisStatus = AnalysisStatus.Error;
+                        track.AnalysisError = ex.Message;
+                        track.AnalysisProgress = 0;
+                    });
+
+                    int done = Interlocked.Increment(ref completed);
+                    MainThread.BeginInvokeOnMainThread(() =>
+                        StatusMessage = $"Analyzing {done}/{total}...");
+                }
+                finally
+                {
+                    semaphore.Release();
+                }
+            });
+
+            await Task.WhenAll(tasks);
+        }
+        catch (OperationCanceledException)
+        {
+            // Cancellation at WhenAll level
+        }
+        finally
+        {
+            MainThread.BeginInvokeOnMainThread(() =>
+            {
+                AnalyzedCount = Tracks.Count(t => t.AnalysisStatus == AnalysisStatus.Analyzed);
+
+                if (ct.IsCancellationRequested)
+                    StatusMessage = $"Batch cancelled. {completed}/{total} completed ({failed} failed).";
+                else
+                    StatusMessage = $"Batch complete: {completed}/{total} analyzed ({failed} failed).";
+
+                IsAnalyzing = false;
+            });
+
+            _analyzeAllCts?.Dispose();
+            _analyzeAllCts = null;
+        }
+    }
+
+    private bool CanCancelAnalyzeAll() => IsAnalyzing;
+
+    [RelayCommand(CanExecute = nameof(CanCancelAnalyzeAll))]
+    private void CancelAnalyzeAll()
+    {
+        _analyzeAllCts?.Cancel();
+    }
 
     partial void OnSelectedTrackChanged(AudioTrack? value)
     {
@@ -232,6 +382,13 @@ public partial class MainViewModel : ObservableObject
     partial void OnIsAnalyzingChanged(bool value)
     {
         AnalyzeSelectedTrackCommand.NotifyCanExecuteChanged();
+        AnalyzeAllCommand.NotifyCanExecuteChanged();
+        CancelAnalyzeAllCommand.NotifyCanExecuteChanged();
+    }
+
+    partial void OnTrackCountChanged(int value)
+    {
+        AnalyzeAllCommand.NotifyCanExecuteChanged();
     }
 
     [RelayCommand]
@@ -322,6 +479,16 @@ public partial class MainViewModel : ObservableObject
         {
             StatusMessage = $"Error reading beatgrid: {ex.Message}";
         }
+    }
+
+    private static double MapProgressMessage(string msg)
+    {
+        if (msg.StartsWith("Loading audio")) return 0.05;
+        if (msg.Contains("Beat detector:")) return 0.15;
+        if (msg.StartsWith("Analyzing tempo")) return 0.70;
+        if (msg.StartsWith("Generating waveform")) return 0.85;
+        if (msg.StartsWith("Analysis complete")) return 1.0;
+        return -1; // unknown message, don't update
     }
 
     private static void ValidateBeatGridAccuracy(BeatGrid grid, AnalysisResult result)

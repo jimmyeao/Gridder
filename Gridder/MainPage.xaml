@@ -30,33 +30,50 @@
             <Button Grid.Row="0"
                     Text="Browse Music Folder"
                     Command="{Binding BrowseFolderCommand}"
+                    Pressed="OnButtonPressed" Released="OnButtonReleased"
                     BackgroundColor="#1e1e2e"
                     TextColor="#00d4ff"
                     FontAttributes="Bold"
                     Margin="0,0,0,8" />
 
             <!-- Action Buttons -->
-            <Grid Grid.Row="1" ColumnDefinitions="*,*" RowDefinitions="Auto,Auto" ColumnSpacing="4" RowSpacing="4"
+            <Grid Grid.Row="1" ColumnDefinitions="*,*" RowDefinitions="Auto,Auto,Auto" ColumnSpacing="4" RowSpacing="4"
                   Margin="0,0,0,4">
                 <Button Grid.Column="0" Grid.Row="0"
                         Text="Analyze"
                         Command="{Binding AnalyzeSelectedTrackCommand}"
+                        Pressed="OnButtonPressed" Released="OnButtonReleased"
                         BackgroundColor="#1e1e2e" TextColor="#ff8800"
                         FontSize="12" FontAttributes="Bold" Padding="4" />
                 <Button Grid.Column="1" Grid.Row="0"
                         Text="Load Grid"
                         Command="{Binding LoadExistingBeatGridCommand}"
+                        Pressed="OnButtonPressed" Released="OnButtonReleased"
                         BackgroundColor="#1e1e2e" TextColor="#aaaaaa"
                         FontSize="12" Padding="4" />
                 <Button Grid.Column="0" Grid.Row="1"
                         Text="Save to File"
                         Command="{Binding SaveBeatGridCommand}"
+                        Pressed="OnButtonPressed" Released="OnButtonReleased"
                         BackgroundColor="#1e1e2e" TextColor="#00ff88"
                         FontSize="12" FontAttributes="Bold" Padding="4" />
                 <Button Grid.Column="1" Grid.Row="1"
                         Text="Export JSON"
                         Command="{Binding ExportJsonCommand}"
+                        Pressed="OnButtonPressed" Released="OnButtonReleased"
                         BackgroundColor="#1e1e2e" TextColor="#aaaaaa"
+                        FontSize="12" Padding="4" />
+                <Button Grid.Column="0" Grid.Row="2"
+                        Text="Analyze All"
+                        Command="{Binding AnalyzeAllCommand}"
+                        Pressed="OnButtonPressed" Released="OnButtonReleased"
+                        BackgroundColor="#1e1e2e" TextColor="#ff8800"
+                        FontSize="12" FontAttributes="Bold" Padding="4" />
+                <Button Grid.Column="1" Grid.Row="2"
+                        Text="Cancel"
+                        Command="{Binding CancelAnalyzeAllCommand}"
+                        Pressed="OnButtonPressed" Released="OnButtonReleased"
+                        BackgroundColor="#1e1e2e" TextColor="#ff4444"
                         FontSize="12" Padding="4" />
             </Grid>
 
@@ -89,50 +106,68 @@
                                 </VisualStateGroup>
                             </VisualStateManager.VisualStateGroups>
 
-                            <Grid ColumnDefinitions="Auto,*,Auto" RowDefinitions="Auto,Auto">
-                                <!-- Status indicator -->
-                                <BoxView Grid.RowSpan="2"
-                                         WidthRequest="4"
-                                         CornerRadius="2"
-                                         Color="{Binding AnalysisStatus, Converter={StaticResource StatusToColor}}"
-                                         VerticalOptions="Fill"
-                                         Margin="0,0,8,0" />
+                            <Grid>
+                                <Grid ColumnDefinitions="Auto,*,Auto" RowDefinitions="Auto,Auto">
+                                    <!-- Status indicator -->
+                                    <BoxView Grid.RowSpan="2"
+                                             WidthRequest="4"
+                                             CornerRadius="2"
+                                             Color="{Binding AnalysisStatus, Converter={StaticResource StatusToColor}}"
+                                             VerticalOptions="Fill"
+                                             Margin="0,0,8,0" />
 
-                                <!-- Title -->
-                                <Label Grid.Column="1" Grid.Row="0"
-                                       Text="{Binding DisplayName}"
-                                       TextColor="#e0e0e0"
-                                       FontSize="13"
-                                       FontAttributes="Bold"
-                                       LineBreakMode="TailTruncation" />
+                                    <!-- Title -->
+                                    <Label Grid.Column="1" Grid.Row="0"
+                                           Text="{Binding DisplayName}"
+                                           TextColor="#e0e0e0"
+                                           FontSize="13"
+                                           FontAttributes="Bold"
+                                           LineBreakMode="TailTruncation" />
 
-                                <!-- Artist + Duration -->
-                                <Label Grid.Column="1" Grid.Row="1"
-                                       TextColor="#888888"
-                                       FontSize="11"
-                                       LineBreakMode="TailTruncation">
-                                    <Label.Text>
-                                        <MultiBinding StringFormat="{}{0} | {1}">
-                                            <Binding Path="DisplayArtist" />
-                                            <Binding Path="DurationDisplay" />
-                                        </MultiBinding>
-                                    </Label.Text>
-                                </Label>
+                                    <!-- Artist + Duration -->
+                                    <Label Grid.Column="1" Grid.Row="1"
+                                           TextColor="#888888"
+                                           FontSize="11"
+                                           LineBreakMode="TailTruncation">
+                                        <Label.Text>
+                                            <MultiBinding StringFormat="{}{0} | {1}">
+                                                <Binding Path="DisplayArtist" />
+                                                <Binding Path="DurationDisplay" />
+                                            </MultiBinding>
+                                        </Label.Text>
+                                    </Label>
 
-                                <!-- Format badge -->
-                                <Border Grid.Column="2" Grid.RowSpan="2"
-                                        BackgroundColor="#2a2a3a"
-                                        StrokeThickness="0"
-                                        Padding="6,2"
-                                        VerticalOptions="Center">
-                                    <Border.StrokeShape>
-                                        <RoundRectangle CornerRadius="4" />
-                                    </Border.StrokeShape>
-                                    <Label Text="{Binding FileFormat}"
-                                           TextColor="#00d4ff"
-                                           FontSize="10"
-                                           FontAttributes="Bold" />
-                                </Border>
+                                    <!-- Format badge -->
+                                    <Border Grid.Column="2" Grid.RowSpan="2"
+                                            BackgroundColor="#2a2a3a"
+                                            StrokeThickness="0"
+                                            Padding="6,2"
+                                            VerticalOptions="Center">
+                                        <Border.StrokeShape>
+                                            <RoundRectangle CornerRadius="4" />
+                                        </Border.StrokeShape>
+                                        <Label Text="{Binding FileFormat}"
+                                               TextColor="#00d4ff"
+                                               FontSize="10"
+                                               FontAttributes="Bold" />
+                                    </Border>
+                                </Grid>
+
+                                <!-- Analysis progress bar overlay -->
+                                <ProgressBar Progress="{Binding AnalysisProgress}"
+                                             ProgressColor="#ff8800"
+                                             HeightRequest="3"
+                                             VerticalOptions="End"
+                                             Margin="-8,-6,-8,-6"
+                                             IsVisible="False">
+                                    <ProgressBar.Triggers>
+                                        <DataTrigger TargetType="ProgressBar"
+                                                     Binding="{Binding AnalysisStatus}"
+                                                     Value="{x:Static models:AnalysisStatus.Analyzing}">
+                                            <Setter Property="IsVisible" Value="True" />
+                                        </DataTrigger>
+                                    </ProgressBar.Triggers>
+                                </ProgressBar>
                             </Grid>
                         </Border>
                     </DataTemplate>
@@ -227,23 +262,27 @@
                     <!-- Transport buttons -->
                     <Button Grid.Column="0" Text="&lt;&lt;"
                             Command="{Binding SkipBackCommand}"
+                            Pressed="OnButtonPressed" Released="OnButtonReleased"
                             BackgroundColor="#1e1e2e" TextColor="#e0e0e0"
                             WidthRequest="40" HeightRequest="34"
                             FontSize="12" Padding="0" />
                     <Button Grid.Column="1"
                             Text="{Binding IsPlaying, Converter={StaticResource BoolToPlayPause}}"
                             Command="{Binding PlayPauseCommand}"
+                            Pressed="OnButtonPressed" Released="OnButtonReleased"
                             BackgroundColor="#1e1e2e" TextColor="#00d4ff"
                             WidthRequest="50" HeightRequest="34"
                             FontSize="14" FontAttributes="Bold" Padding="0"
                             x:Name="PlayPauseBtn" />
                     <Button Grid.Column="2" Text="Stop"
                             Command="{Binding StopCommand}"
+                            Pressed="OnButtonPressed" Released="OnButtonReleased"
                             BackgroundColor="#1e1e2e" TextColor="#e0e0e0"
                             WidthRequest="44" HeightRequest="34"
                             FontSize="11" Padding="0" />
                     <Button Grid.Column="3" Text="&gt;&gt;"
                             Command="{Binding SkipForwardCommand}"
+                            Pressed="OnButtonPressed" Released="OnButtonReleased"
                             BackgroundColor="#1e1e2e" TextColor="#e0e0e0"
                             WidthRequest="40" HeightRequest="34"
                             FontSize="12" Padding="0" />

@@ -24,6 +24,9 @@ public partial class AudioTrack : ObservableObject
     [ObservableProperty]
     private string? _analysisError;
 
+    [ObservableProperty]
+    private double _analysisProgress;
+
     public string DisplayName => string.IsNullOrWhiteSpace(Title)
         ? Path.GetFileNameWithoutExtension(FilePath)
         : Title;
