@@ -38,7 +38,7 @@ def main():
         sys.exit(2)
 
     from .beat_detector import detect_beats
-    from .mp3_utils import get_mp3_encoder_delay
+    from .mp3_utils import get_mp3_encoder_delay, read_serato_beatgrid, reconstruct_serato_beats
     from .tempo_segmenter import segment_tempo
     from .waveform_generator import generate_waveform
 
@@ -219,6 +219,11 @@ def main():
                   f"{median_interval*1000:.1f}ms median)",
                   file=sys.stderr)
 
+    # Save pre-snap beats for Serato calibration (step 2f).
+    # Grid snapping can change beat positions significantly, making it
+    # hard to match against Serato's existing grid. Use raw detections.
+    pre_snap_beats = beat_times.copy()
+
     # Step 2e: Snap beats to regular grid if tempo is constant.
     # For EDM/electronic tracks, beats should be at perfectly even intervals.
     # After false beat cleaning, use cumulative beat numbering + iterative
@@ -329,55 +334,121 @@ def main():
                       file=sys.stderr)
 
     # Step 2f: Apply Serato position offset.
-    # Two per-track components:
     #
-    # 1. MP3 codec delay (MP3 only): encoder adds padding at the start
-    #    (read from LAME/Xing header per file). The decoder's MDCT windowing
-    #    adds ~529 samples (MPEG1 Layer III). Our gapless decoders strip
-    #    the encoder delay; Serato preserves raw frames including both.
+    # Strategy: if the file already has a Serato BeatGrid, calibrate the
+    # offset empirically by matching our detected beats to Serato's existing
+    # beat positions. This gives the exact offset for this specific file's
+    # encoding/decoder combination.
     #
-    # 2. Onset-to-peak alignment (all formats, measured per track):
-    #    beat detectors find transient onsets; Serato displays amplitude
-    #    peaks which arrive a few ms later. We measure this from the actual
-    #    audio at each beat position — varies by drum sound/genre.
+    # If no existing grid, fall back to computed offset from:
+    #   1. MP3 codec delay (encoder delay + decoder delay)
+    #   2. Per-track onset-to-peak alignment
     MPEG1_DECODER_DELAY = 529  # standard MPEG1 Layer III decoder delay
 
-    # Component 1: codec delay (MP3 only)
-    encoder_delay_samples = get_mp3_encoder_delay(audio_path)
-    if encoder_delay_samples > 0:
-        codec_delay_s = (encoder_delay_samples + MPEG1_DECODER_DELAY) / sr
+    # Try calibration against existing Serato BeatGrid.
+    # Use pre_snap_beats (raw detections) for matching, since grid snapping
+    # can shift beats to different BPM/phase than Serato's grid.
+    calibrated_offset = None
+    existing_markers = read_serato_beatgrid(audio_path)
+    if existing_markers is not None and len(existing_markers) >= 1:
+        serato_beats = reconstruct_serato_beats(existing_markers, max_beats=500,
+                                                 duration=duration)
+        if len(serato_beats) >= 4:
+            serato_arr = np.array(serato_beats)
+            # Method 1: Direct matching — find pairs within 100ms
+            offsets = []
+            for our_beat in pre_snap_beats[:min(100, len(pre_snap_beats))]:
+                dists = np.abs(serato_arr - our_beat)
+                min_idx = int(np.argmin(dists))
+                min_dist = float(dists[min_idx])
+                if min_dist < 0.100:
+                    offsets.append(float(serato_arr[min_idx]) - float(our_beat))
+
+            # Method 2: Grid-point matching for single-marker grids.
+            # When BPM differs slightly, direct matching fails because beats
+            # drift apart. Instead, snap each beat to the nearest Serato grid
+            # point and compute the offset from there.
+            if len(offsets) < 10 and len(existing_markers) == 1 and 'bpm' in existing_markers[0]:
+                serato_start = existing_markers[0]['position']
+                serato_bpm = existing_markers[0]['bpm']
+                if serato_bpm > 0:
+                    serato_interval = 60.0 / serato_bpm
+                    grid_offsets = []
+                    for our_beat in pre_snap_beats[:min(100, len(pre_snap_beats))]:
+                        k = round((our_beat - serato_start) / serato_interval)
+                        nearest_grid = serato_start + k * serato_interval
+                        off = nearest_grid - our_beat
+                        # Only count if within 25% of a beat interval
+                        if abs(off) < serato_interval * 0.25:
+                            grid_offsets.append(off)
+                    if len(grid_offsets) >= 10:
+                        offsets = grid_offsets
+                        print(f"  Serato calibration: used grid-point matching "
+                              f"(single-marker, {serato_bpm:.1f} BPM)",
+                              file=sys.stderr)
+
+            if len(offsets) >= 10:
+                calibrated_offset = float(np.median(offsets))
+                # Sanity check: offset should be between -10ms and 60ms
+                if -0.010 <= calibrated_offset <= 0.060:
+                    iqr = float(np.percentile(offsets, 75) - np.percentile(offsets, 25))
+                    print(f"  Serato calibration: {len(offsets)} matched beats, "
+                          f"offset={calibrated_offset*1000:.1f}ms "
+                          f"(IQR={iqr*1000:.1f}ms)",
+                          file=sys.stderr)
+                else:
+                    print(f"  Serato calibration rejected: offset={calibrated_offset*1000:.1f}ms "
+                          f"out of range [-10, 60]ms, using computed offset",
+                          file=sys.stderr)
+                    calibrated_offset = None
+            else:
+                print(f"  Serato calibration: only {len(offsets)} matched beats "
+                      f"(need 10+), using computed offset", file=sys.stderr)
+                calibrated_offset = None
+    elif existing_markers is not None and len(existing_markers) == 0:
+        print(f"  Serato grid found but empty, using computed offset",
+              file=sys.stderr)
+
+    if calibrated_offset is not None:
+        total_offset = calibrated_offset
+        beat_times = beat_times + total_offset
+        print(f"  Serato offset: +{total_offset*1000:.1f}ms [calibrated from existing grid]",
+              file=sys.stderr)
     else:
-        codec_delay_s = 0.0
+        # Fallback: compute offset from codec delay + onset-to-peak
+        # Component 1: codec delay (MP3 only)
+        encoder_delay_samples = get_mp3_encoder_delay(audio_path)
+        if encoder_delay_samples > 0:
+            codec_delay_s = (encoder_delay_samples + MPEG1_DECODER_DELAY) / sr
+        else:
+            codec_delay_s = 0.0
 
-    # Component 2: per-track onset-to-peak measured from audio content.
-    # For each beat, find the amplitude peak within a 25ms window after
-    # the detected onset. The median peak offset across all beats is
-    # the track's characteristic onset-to-peak time.
-    onset_to_peak_s = 0.005  # fallback: 5ms
-    if len(beat_times) >= 4:
-        peak_window = int(0.025 * sr)  # 25ms search window
-        peak_offsets = []
-        for bt in beat_times:
-            start = int(bt * sr)
-            end = min(start + peak_window, len(y))
-            if end - start < 10:
-                continue
-            window = np.abs(y[start:end])
-            peak_idx = int(np.argmax(window))
-            peak_offsets.append(peak_idx / sr)
-        if peak_offsets:
-            onset_to_peak_s = float(np.median(peak_offsets))
-            # Clamp to reasonable range: 1ms to 20ms
-            onset_to_peak_s = max(0.001, min(0.020, onset_to_peak_s))
+        # Component 2: per-track onset-to-peak measured from audio content
+        onset_to_peak_s = 0.005  # fallback: 5ms
+        if len(beat_times) >= 4:
+            peak_window = int(0.025 * sr)  # 25ms search window
+            peak_offsets = []
+            for bt in beat_times:
+                start = int(bt * sr)
+                end = min(start + peak_window, len(y))
+                if end - start < 10:
+                    continue
+                window = np.abs(y[start:end])
+                peak_idx = int(np.argmax(window))
+                peak_offsets.append(peak_idx / sr)
+            if peak_offsets:
+                onset_to_peak_s = float(np.median(peak_offsets))
+                onset_to_peak_s = max(0.001, min(0.020, onset_to_peak_s))
 
-    total_offset = codec_delay_s + onset_to_peak_s
-    beat_times = beat_times + total_offset
+        total_offset = codec_delay_s + onset_to_peak_s
+        beat_times = beat_times + total_offset
 
-    print(f"  Serato offset: +{total_offset*1000:.1f}ms total "
-          f"(codec delay {codec_delay_s*1000:.1f}ms"
-          f"{f' [{encoder_delay_samples}+{MPEG1_DECODER_DELAY} samples]' if encoder_delay_samples > 0 else ''}"
-          f" + onset-to-peak {onset_to_peak_s*1000:.1f}ms [measured])",
-          file=sys.stderr)
+        print(f"  Serato offset: +{total_offset*1000:.1f}ms total "
+              f"(codec delay {codec_delay_s*1000:.1f}ms"
+              f"{f' [{encoder_delay_samples}+{MPEG1_DECODER_DELAY} samples]' if encoder_delay_samples > 0 else ''}"
+              f" + onset-to-peak {onset_to_peak_s*1000:.1f}ms [measured])"
+              f" [no existing Serato grid]",
+              file=sys.stderr)
 
     # Step 3: Segment tempo
     print("Analyzing tempo segments...", file=sys.stderr)

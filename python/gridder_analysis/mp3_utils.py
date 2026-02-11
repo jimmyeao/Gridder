@@ -1,5 +1,5 @@
 """
-Utilities for reading MP3 LAME/Xing header metadata.
+Utilities for reading MP3 metadata and existing Serato BeatGrid tags.
 
 MP3 encoders (LAME, etc.) add padding samples at the start of the file.
 Different decoders handle this differently:
@@ -13,6 +13,7 @@ delay when writing Serato tags for MP3 files.
 """
 
 import struct
+import sys
 
 
 def get_mp3_encoder_delay(filepath):
@@ -132,3 +133,221 @@ def get_mp3_encoder_delay(filepath):
         return encoder_delay
 
     return 576  # LAME default
+
+
+def read_serato_beatgrid(filepath):
+    """Read existing Serato BeatGrid markers from an audio file.
+
+    For MP3: parses the ID3v2 GEOB frame with description "Serato BeatGrid".
+    Returns a list of marker dicts, or None if no grid found.
+
+    Each non-terminal marker has: {'position': float, 'beats_until_next': int}
+    Terminal marker (last) has:   {'position': float, 'bpm': float}
+    """
+    if filepath.lower().endswith('.mp3'):
+        return _read_mp3_serato_beatgrid(filepath)
+    # FLAC has no codec delay so calibration is less important
+    return None
+
+
+def _read_mp3_serato_beatgrid(filepath):
+    """Parse ID3v2 GEOB frame 'Serato BeatGrid' from MP3 file."""
+    try:
+        with open(filepath, 'rb') as f:
+            header = f.read(10)
+            if len(header) < 10 or header[:3] != b'ID3':
+                return None
+
+            version_major = header[3]
+            tag_size = ((header[6] & 0x7F) << 21 |
+                        (header[7] & 0x7F) << 14 |
+                        (header[8] & 0x7F) << 7 |
+                        (header[9] & 0x7F))
+
+            # Read full ID3v2 tag
+            tag_data = f.read(tag_size)
+    except IOError:
+        return None
+
+    if len(tag_data) < tag_size:
+        return None
+
+    pos = 0
+    end = tag_size
+
+    while pos < end - 10:
+        frame_id = tag_data[pos:pos + 4]
+        if frame_id[0] == 0:  # Padding
+            break
+
+        if version_major == 4:
+            # ID3v2.4: synchsafe frame size
+            frame_size = ((tag_data[pos + 4] & 0x7F) << 21 |
+                          (tag_data[pos + 5] & 0x7F) << 14 |
+                          (tag_data[pos + 6] & 0x7F) << 7 |
+                          (tag_data[pos + 7] & 0x7F))
+        else:
+            # ID3v2.3: regular big-endian frame size
+            frame_size = (tag_data[pos + 4] << 24 |
+                          tag_data[pos + 5] << 16 |
+                          tag_data[pos + 6] << 8 |
+                          tag_data[pos + 7])
+
+        pos += 10  # Skip frame header (4 ID + 4 size + 2 flags)
+
+        if frame_size <= 0 or pos + frame_size > end:
+            break
+
+        if frame_id == b'GEOB':
+            frame_data = tag_data[pos:pos + frame_size]
+            result = _parse_geob_serato_beatgrid(frame_data)
+            if result is not None:
+                return result
+
+        pos += frame_size
+
+    return None
+
+
+def _parse_geob_serato_beatgrid(frame_data):
+    """Parse a GEOB frame; returns marker list if it's Serato BeatGrid."""
+    if len(frame_data) < 4:
+        return None
+
+    encoding = frame_data[0]
+    pos = 1
+
+    # Read null-terminated strings (MIME, filename, description)
+    # MIME type is always Latin1 regardless of encoding byte
+    def find_null(data, start):
+        idx = data.find(b'\x00', start)
+        return idx if idx >= 0 else len(data)
+
+    # MIME type
+    null_pos = find_null(frame_data, pos)
+    pos = null_pos + 1
+
+    # Filename (encoding-dependent null terminator)
+    if encoding in (1, 2):
+        # UTF-16: look for double-null
+        while pos < len(frame_data) - 1:
+            if frame_data[pos] == 0 and frame_data[pos + 1] == 0:
+                pos += 2
+                break
+            pos += 1
+        else:
+            return None
+    else:
+        null_pos = find_null(frame_data, pos)
+        pos = null_pos + 1
+
+    # Description
+    if encoding in (1, 2):
+        desc_start = pos
+        while pos < len(frame_data) - 1:
+            if frame_data[pos] == 0 and frame_data[pos + 1] == 0:
+                desc_bytes = frame_data[desc_start:pos]
+                pos += 2
+                break
+            pos += 1
+        else:
+            return None
+        desc_str = desc_bytes.decode('utf-16-le', errors='replace')
+    else:
+        null_pos = find_null(frame_data, pos)
+        desc_str = frame_data[pos:null_pos].decode('latin1', errors='replace')
+        pos = null_pos + 1
+
+    if desc_str != 'Serato BeatGrid':
+        return None
+
+    # Binary data starts here; strip optional "Serato BeatGrid\0" prefix
+    grid_data = frame_data[pos:]
+    prefix = b'Serato BeatGrid\x00'
+    if grid_data.startswith(prefix):
+        grid_data = grid_data[len(prefix):]
+
+    return _parse_beatgrid_binary(grid_data)
+
+
+def _parse_beatgrid_binary(data):
+    """Parse Serato BeatGrid binary format into marker list.
+
+    Format: [0x01, 0x00] header + [uint32 BE] count + markers + [0x00] footer
+    Non-terminal marker: [float32 BE position] + [uint32 BE beats_until_next]
+    Terminal marker:     [float32 BE position] + [float32 BE bpm]
+    """
+    if len(data) < 6:
+        return None
+
+    if data[0] != 0x01 or data[1] != 0x00:
+        return None
+
+    marker_count = struct.unpack('>I', data[2:6])[0]
+    if marker_count == 0:
+        return None
+
+    markers = []
+    pos = 6
+
+    for i in range(marker_count):
+        if pos + 8 > len(data):
+            break
+
+        position = struct.unpack('>f', data[pos:pos + 4])[0]
+
+        if i < marker_count - 1:
+            beats_until_next = struct.unpack('>I', data[pos + 4:pos + 8])[0]
+            markers.append({
+                'position': float(position),
+                'beats_until_next': int(beats_until_next),
+            })
+        else:
+            bpm = struct.unpack('>f', data[pos + 4:pos + 8])[0]
+            markers.append({
+                'position': float(position),
+                'bpm': float(bpm),
+            })
+
+        pos += 8
+
+    return markers if len(markers) == marker_count else None
+
+
+def reconstruct_serato_beats(markers, max_beats=500, duration=None):
+    """Reconstruct individual beat times from Serato BeatGrid markers.
+
+    Uses Serato's interpolation: beats are evenly spaced between markers.
+    For the terminal marker, generates beats using its BPM.
+    Returns a numpy-compatible list of beat positions in seconds.
+    """
+    if not markers or len(markers) < 1:
+        return []
+
+    beats = []
+    for i, marker in enumerate(markers):
+        pos = marker['position']
+        beats.append(pos)
+
+        if i < len(markers) - 1:
+            # Non-terminal: interpolate to next marker
+            next_pos = markers[i + 1]['position']
+            n_beats = marker.get('beats_until_next', 0)
+            if n_beats > 0:
+                interval = (next_pos - pos) / n_beats
+                for k in range(1, n_beats):
+                    beats.append(pos + k * interval)
+                    if len(beats) >= max_beats:
+                        return beats
+        else:
+            # Terminal marker: generate beats using BPM
+            bpm = marker.get('bpm', 0)
+            if bpm > 0:
+                interval = 60.0 / bpm
+                max_time = duration if duration else pos + interval * max_beats
+                t = pos + interval
+                while t < max_time and len(beats) < max_beats:
+                    beats.append(t)
+                    t += interval
+
+    return beats
