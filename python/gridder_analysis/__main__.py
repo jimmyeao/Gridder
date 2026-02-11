@@ -38,6 +38,7 @@ def main():
         sys.exit(2)
 
     from .beat_detector import detect_beats
+    from .mp3_utils import get_mp3_encoder_delay
     from .tempo_segmenter import segment_tempo
     from .waveform_generator import generate_waveform
 
@@ -220,10 +221,10 @@ def main():
 
     # Step 2e: Snap beats to regular grid if tempo is constant.
     # For EDM/electronic tracks, beats should be at perfectly even intervals.
-    # After false beat cleaning, use phase-matched regression: assign each
-    # beat its expected "beat number" based on the median interval, then
-    # regress beat_number -> beat_time. This is immune to false insertions
-    # (which shift array indices but not phase-matched beat numbers).
+    # After false beat cleaning, use cumulative beat numbering + iterative
+    # regression. Cumulative numbering assigns each beat a sequential number
+    # based on its LOCAL interval to the previous beat (immune to accumulated
+    # drift that breaks global phase matching for long tracks).
     if len(beat_times) >= 8:
         intervals = np.diff(beat_times)
         q25, q75 = np.percentile(intervals, [25, 75])
@@ -231,19 +232,13 @@ def main():
         iqr_ratio = (q75 - q25) / median_interval if median_interval > 0 else 1.0
 
         if iqr_ratio < 0.03:  # IQR < 3% of median = very constant tempo
-            # Phase-match each beat to its expected beat number.
-            # Only works for very regular tracks (IQR < 3%) where the
-            # interval estimate is accurate enough to assign correct numbers.
-            #
-            # At 100fps, frame quantization biases the median interval by up
-            # to ±10ms. Over hundreds of beats this compounds, making the
-            # expected beat count off by several. We try multiple candidate
-            # counts around the median-based estimate and pick the one where
-            # the most beats fall within 30ms of the grid.
+            # Estimate the best interval using multiple candidate beat counts.
+            # At 100fps, frame quantization biases the median by up to ±10ms.
             total_span = float(beat_times[-1] - beat_times[0])
             base_count = round(total_span / median_interval)
-            first_beat = float(beat_times[0])
 
+            # Try candidates and pick the one with the most beats close to
+            # the nearest grid position (modular distance, drift-immune).
             best_est = total_span / base_count if base_count > 0 else median_interval
             best_good = 0
             for delta in range(-5, 6):
@@ -251,18 +246,26 @@ def main():
                 if c <= 0:
                     continue
                 trial = total_span / c
-                nums = np.round((beat_times - first_beat) / trial).astype(int)
-                _, u_idx = np.unique(nums, return_index=True)
-                fitted = first_beat + nums[u_idx] * trial
-                n_good = int(np.sum(np.abs(beat_times[u_idx] - fitted) < 0.030))
+                # Modular distance: how close is each beat to its nearest
+                # grid position? This doesn't accumulate drift.
+                first_beat = float(beat_times[0])
+                offsets = (beat_times - first_beat) % trial
+                mod_dist = np.minimum(offsets, trial - offsets)
+                n_good = int(np.sum(mod_dist < 0.030))
                 if n_good > best_good:
                     best_good = n_good
                     best_est = trial
 
             est_interval = best_est
-            beat_numbers = np.round(
-                (beat_times - first_beat) / est_interval
-            ).astype(int)
+
+            # Cumulative beat numbering: assign each beat its number based
+            # on the LOCAL gap to the previous beat. This is immune to
+            # accumulated drift (unlike global phase matching which breaks
+            # when sections have slightly different detected tempos).
+            beat_numbers = np.zeros(len(beat_times), dtype=int)
+            for i in range(1, len(beat_times)):
+                gap = beat_times[i] - beat_times[i - 1]
+                beat_numbers[i] = beat_numbers[i - 1] + max(1, round(gap / est_interval))
 
             # Remove duplicates (two beats mapped to same number)
             _, unique_idx = np.unique(beat_numbers, return_index=True)
@@ -325,13 +328,55 @@ def main():
                       f"(IQR={iqr_ratio:.4f}), deferring to segmenter",
                       file=sys.stderr)
 
-    # Step 2f: Apply Serato alignment offset.
-    # Beat detection targets percussion onsets, but Serato's waveform display
-    # shows combined audio where peaks appear ~20-30ms after the drum transient.
-    # Shifting beats forward aligns markers with Serato's visual convention.
-    SERATO_ALIGNMENT_OFFSET = 0.020  # 20ms
-    beat_times = beat_times + SERATO_ALIGNMENT_OFFSET
-    print(f"  Applied +{SERATO_ALIGNMENT_OFFSET*1000:.0f}ms Serato alignment offset",
+    # Step 2f: Apply Serato position offset.
+    # Two per-track components:
+    #
+    # 1. MP3 codec delay (MP3 only): encoder adds padding at the start
+    #    (read from LAME/Xing header per file). The decoder's MDCT windowing
+    #    adds ~529 samples (MPEG1 Layer III). Our gapless decoders strip
+    #    the encoder delay; Serato preserves raw frames including both.
+    #
+    # 2. Onset-to-peak alignment (all formats, measured per track):
+    #    beat detectors find transient onsets; Serato displays amplitude
+    #    peaks which arrive a few ms later. We measure this from the actual
+    #    audio at each beat position — varies by drum sound/genre.
+    MPEG1_DECODER_DELAY = 529  # standard MPEG1 Layer III decoder delay
+
+    # Component 1: codec delay (MP3 only)
+    encoder_delay_samples = get_mp3_encoder_delay(audio_path)
+    if encoder_delay_samples > 0:
+        codec_delay_s = (encoder_delay_samples + MPEG1_DECODER_DELAY) / sr
+    else:
+        codec_delay_s = 0.0
+
+    # Component 2: per-track onset-to-peak measured from audio content.
+    # For each beat, find the amplitude peak within a 25ms window after
+    # the detected onset. The median peak offset across all beats is
+    # the track's characteristic onset-to-peak time.
+    onset_to_peak_s = 0.005  # fallback: 5ms
+    if len(beat_times) >= 4:
+        peak_window = int(0.025 * sr)  # 25ms search window
+        peak_offsets = []
+        for bt in beat_times:
+            start = int(bt * sr)
+            end = min(start + peak_window, len(y))
+            if end - start < 10:
+                continue
+            window = np.abs(y[start:end])
+            peak_idx = int(np.argmax(window))
+            peak_offsets.append(peak_idx / sr)
+        if peak_offsets:
+            onset_to_peak_s = float(np.median(peak_offsets))
+            # Clamp to reasonable range: 1ms to 20ms
+            onset_to_peak_s = max(0.001, min(0.020, onset_to_peak_s))
+
+    total_offset = codec_delay_s + onset_to_peak_s
+    beat_times = beat_times + total_offset
+
+    print(f"  Serato offset: +{total_offset*1000:.1f}ms total "
+          f"(codec delay {codec_delay_s*1000:.1f}ms"
+          f"{f' [{encoder_delay_samples}+{MPEG1_DECODER_DELAY} samples]' if encoder_delay_samples > 0 else ''}"
+          f" + onset-to-peak {onset_to_peak_s*1000:.1f}ms [measured])",
           file=sys.stderr)
 
     # Step 3: Segment tempo

@@ -22,7 +22,7 @@ import numpy as np
 
 
 def segment_tempo(beat_times: np.ndarray,
-                  max_drift_ms: float = 20.0) -> list[dict]:
+                  max_drift_ms: float = 15.0) -> list[dict]:
     """
     Build tempo segments from detected beat positions.
 
@@ -53,6 +53,12 @@ def segment_tempo(beat_times: np.ndarray,
     # Step 2: Bridge over outlier micro-segments
     segments = _bridge_outliers(segments, beat_times, max_drift_ms)
     print(f"  After bridging: {len(segments)} segments", file=sys.stderr)
+
+    # Step 3: Conservative merge of adjacent segments with similar BPMs.
+    # Only merge when the combined Serato interpolation drift stays within
+    # the original tolerance — this never reduces beat position accuracy.
+    segments = _consolidate_similar(segments, beat_times, max_drift_ms)
+    print(f"  After consolidation: {len(segments)} segments", file=sys.stderr)
 
     # Log final segments with implicit BPMs (what Serato will actually use)
     print(f"  Final: {len(segments)} segment(s):", file=sys.stderr)
@@ -186,6 +192,58 @@ def _bridge_outliers(segments: list[dict], beat_times: np.ndarray,
             i += 1
 
     return result
+
+
+def _consolidate_similar(segments: list[dict], beat_times: np.ndarray,
+                         max_drift_ms: float) -> list[dict]:
+    """
+    Conservative merge of adjacent segments with similar BPMs.
+
+    Only merges when the combined segment's Serato interpolation drift for
+    ALL intermediate beats stays within the original drift tolerance. This
+    preserves beat position accuracy — no beat moves further from its
+    detected position than the original segmentation allowed.
+    """
+    if len(segments) <= 1:
+        return segments
+
+    max_drift_sec = max_drift_ms / 1000.0
+    merged = True
+
+    while merged:
+        merged = False
+        result = [segments[0]]
+
+        for i in range(1, len(segments)):
+            prev = result[-1]
+            curr = segments[i]
+
+            # Try merging prev + curr
+            combined_start = prev["start_beat_index"]
+            combined_end = curr["end_beat_index"]
+            combined_count = combined_end - combined_start
+
+            if combined_count >= 2:
+                drift = _serato_max_drift(beat_times, combined_start, combined_end)
+
+                if drift <= max_drift_sec:
+                    # Merge: combined drift is within tolerance
+                    combined_bpm = _implicit_bpm(beat_times, combined_start, combined_end)
+                    result[-1] = {
+                        "start_beat_index": combined_start,
+                        "end_beat_index": combined_end,
+                        "start_position": prev["start_position"],
+                        "bpm": round(float(combined_bpm), 2),
+                        "beat_count": combined_count,
+                    }
+                    merged = True
+                    continue
+
+            result.append(curr)
+
+        segments = result
+
+    return segments
 
 
 def _serato_max_drift_good_only(beat_times: np.ndarray, start_idx: int,
