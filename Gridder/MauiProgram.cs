@@ -24,7 +24,7 @@ public static class MauiProgram
         builder.Services.AddSingleton<IFolderPickerService, FolderPickerService>();
         builder.Services.AddSingleton<ITrackMetadataService, TrackMetadataService>();
         builder.Services.AddSingleton<ILibraryScanService, LibraryScanService>();
-        builder.Services.AddSingleton<IPythonAnalysisService, PythonAnalysisService>();
+        builder.Services.AddSingleton<ITrackAnalysisService, TrackAnalysisService>();
         builder.Services.AddSingleton<IBeatGridSerializer, BeatGridSerializer>();
         builder.Services.AddSingleton<ISeratoTagService, SeratoTagService>();
         builder.Services.AddSingleton<JsonExportService>();

@@ -11,7 +11,7 @@ public partial class MainViewModel : ObservableObject
 {
     private readonly ILibraryScanService _libraryScanService;
     private readonly IFolderPickerService _folderPickerService;
-    private readonly IPythonAnalysisService _pythonAnalysisService;
+    private readonly ITrackAnalysisService _analysisService;
     private readonly ISeratoTagService _seratoTagService;
     private readonly JsonExportService _jsonExportService;
     private CancellationTokenSource? _analyzeAllCts;
@@ -22,14 +22,14 @@ public partial class MainViewModel : ObservableObject
     public MainViewModel(
         ILibraryScanService libraryScanService,
         IFolderPickerService folderPickerService,
-        IPythonAnalysisService pythonAnalysisService,
+        ITrackAnalysisService analysisService,
         ISeratoTagService seratoTagService,
         JsonExportService jsonExportService,
         PlaybackViewModel playbackViewModel)
     {
         _libraryScanService = libraryScanService;
         _folderPickerService = folderPickerService;
-        _pythonAnalysisService = pythonAnalysisService;
+        _analysisService = analysisService;
         _seratoTagService = seratoTagService;
         _jsonExportService = jsonExportService;
         Playback = playbackViewModel;
@@ -152,7 +152,7 @@ public partial class MainViewModel : ObservableObject
 
         try
         {
-            var result = await _pythonAnalysisService.AnalyzeTrackAsync(
+            var result = await _analysisService.AnalyzeTrackAsync(
                 track.FilePath, progress, firstBeatSeconds: track.FirstBeatOverride);
 
             // Convert analysis result to BeatGrid
@@ -273,7 +273,7 @@ public partial class MainViewModel : ObservableObject
                             MainThread.BeginInvokeOnMainThread(() => track.AnalysisProgress = p);
                     });
 
-                    var result = await _pythonAnalysisService.AnalyzeTrackAsync(track.FilePath, progress, ct);
+                    var result = await _analysisService.AnalyzeTrackAsync(track.FilePath, progress, ct);
 
                     var beatGrid = ConvertToBeatGrid(result);
                     track.BeatGrid = beatGrid;

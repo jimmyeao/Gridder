@@ -17,7 +17,7 @@
 		<SingleProject>true</SingleProject>
 		<ImplicitUsings>enable</ImplicitUsings>
 		<Nullable>enable</Nullable>
-		<NoWarn>$(NoWarn);MVVMTK0045</NoWarn>
+		<NoWarn>$(NoWarn);MVVMTK0045;NU1701</NoWarn>
 
 		<!-- Display name -->
 		<ApplicationTitle>Gridder</ApplicationTitle>
@@ -58,12 +58,16 @@
 	</ItemGroup>
 
 	<ItemGroup>
+		<PackageReference Include="FlacBox" Version="1.0.1" />
 		<PackageReference Include="Microsoft.Maui.Controls" Version="$(MauiVersion)" />
 		<PackageReference Include="Microsoft.Extensions.Logging.Debug" Version="10.0.0" />
 		<PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.0" />
 		<PackageReference Include="SkiaSharp.Views.Maui.Controls" Version="3.119.0" />
 		<PackageReference Include="TagLibSharp" Version="2.3.0" />
 		<PackageReference Include="Plugin.Maui.Audio" Version="4.0.0" />
+		<PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.17.3" />
+		<PackageReference Include="FftSharp" Version="2.1.0" />
+		<PackageReference Include="NLayer" Version="1.16.0" />
 	</ItemGroup>
 
 </Project>
