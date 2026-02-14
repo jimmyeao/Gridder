@@ -1,5 +1,4 @@
-# Gridder
-
+![alt text](gridder.jpeg)
 
 # Building
 
