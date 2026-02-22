@@ -1,0 +1,173 @@
+name: Build & Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Install MAUI workload
+        run: dotnet workload install maui-windows
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Python dependencies
+        run: |
+          cd python
+          python -m venv .venv
+          .venv\Scripts\pip install --upgrade pip
+          .venv\Scripts\pip install -r requirements.txt
+          .venv\Scripts\pip install pyinstaller
+        shell: cmd
+
+      - name: Publish .NET MAUI app
+        run: |
+          dotnet publish Gridder\Gridder.csproj ^
+            -f net10.0-windows10.0.19041.0 ^
+            -c Release ^
+            -r win-x64 ^
+            --self-contained true ^
+            -o publish\win-x64 ^
+            -p:WindowsPackageType=None ^
+            -p:PublishSingleFile=false
+        shell: cmd
+
+      - name: Build Python standalone exe
+        run: |
+          cd python
+          .venv\Scripts\pyinstaller gridder_analysis.spec --noconfirm
+        shell: cmd
+
+      - name: Build installer
+        run: |
+          choco install innosetup -y --no-progress
+          iscc installer\gridder.iss
+        shell: cmd
+
+      - name: Upload Windows installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer
+          path: installer/Output/GridderSetup.exe
+
+  build-macos:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Install MAUI workload
+        run: dotnet workload install maui-maccatalyst
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Python dependencies
+        run: |
+          cd python
+          python3 -m venv .venv
+          .venv/bin/pip install --upgrade pip
+          .venv/bin/pip install -r requirements.txt
+          .venv/bin/pip install pyinstaller
+
+      - name: Publish .NET MAUI app
+        run: |
+          dotnet publish Gridder/Gridder.csproj \
+            -f net10.0-maccatalyst \
+            -c Release \
+            --self-contained true \
+            -o publish/maccatalyst \
+            -p:CreatePackage=false \
+            -p:EnableCodeSigning=false
+
+      - name: Build Python standalone exe
+        run: |
+          cd python
+          .venv/bin/pyinstaller gridder_analysis.spec --noconfirm
+
+      - name: Embed Python engine in app bundle
+        run: |
+          APP_BUNDLE=$(find publish/maccatalyst -name "*.app" -type d | head -1)
+          echo "APP_BUNDLE=$APP_BUNDLE" >> $GITHUB_ENV
+          echo "APP_NAME=$(basename "$APP_BUNDLE")" >> $GITHUB_ENV
+          mkdir -p "$APP_BUNDLE/Contents/Resources"
+          cp -R python/dist/gridder_analysis "$APP_BUNDLE/Contents/Resources/gridder_analysis"
+          chmod +x "$APP_BUNDLE/Contents/Resources/gridder_analysis/gridder_analysis"
+
+      - name: Code sign app bundle
+        run: codesign --force --deep --sign - "$APP_BUNDLE"
+
+      - name: Create DMG
+        run: |
+          brew install create-dmg
+          mkdir -p installer/Output
+          create-dmg \
+            --volname "Gridder" \
+            --window-pos 200 120 \
+            --window-size 600 400 \
+            --icon-size 100 \
+            --icon "$APP_NAME" 150 190 \
+            --app-drop-link 450 190 \
+            --no-internet-enable \
+            installer/Output/Gridder.dmg \
+            "$APP_BUNDLE" || true
+          # Fallback if create-dmg failed
+          if [ ! -f installer/Output/Gridder.dmg ]; then
+            hdiutil create -volname "Gridder" -srcfolder "$APP_BUNDLE" \
+              -ov -format UDZO installer/Output/Gridder.dmg
+          fi
+
+      - name: Upload macOS DMG
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-dmg
+          path: installer/Output/Gridder.dmg
+
+  release:
+    needs: [build-windows, build-macos]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - name: Download Windows artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-installer
+          path: artifacts/
+
+      - name: Download macOS artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: macos-dmg
+          path: artifacts/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          generate_release_notes: true
+          files: |
+            artifacts/GridderSetup.exe
+            artifacts/Gridder.dmg

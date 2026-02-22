@@ -373,3 +373,7 @@ FodyWeavers.xsd
 # Publish and installer output
 /publish/
 /installer/Output/
+
+# macOS build artifacts
+*.dmg
+*.app/

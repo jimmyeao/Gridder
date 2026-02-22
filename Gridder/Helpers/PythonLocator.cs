@@ -25,6 +25,8 @@ public static class PythonLocator
             Path.Combine(appDir, "gridder_analysis", exeName),
             // Sibling directory
             Path.GetFullPath(Path.Combine(appDir, "..", "gridder_analysis", exeName)),
+            // macOS .app bundle: Contents/Resources/gridder_analysis/
+            Path.GetFullPath(Path.Combine(appDir, "..", "Resources", "gridder_analysis", exeName)),
             // Dev: built in python/dist/
             Path.GetFullPath(Path.Combine(appDir, "..", "..", "..", "..", "..", "python", "dist", "gridder_analysis", exeName)),
             Path.GetFullPath(Path.Combine(appDir, "..", "..", "..", "..", "python", "dist", "gridder_analysis", exeName)),
