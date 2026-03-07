@@ -11,8 +11,14 @@ Audio regridding solutions for DJs allow for the correction of drifting tempos i
 
 # Requirements
 
-.net core SDK (10.0 recommended). https://dotnet.microsoft.com/en-us/download
+.net core SDK (10.0 recommended).  
+ https://dotnet.microsoft.com/en-us/download
 
+librosa   
+numpy   
+soundfile
+   
+`pip install librosa numpy soundfile` 
 
 # Building
 
@@ -23,8 +29,3 @@ Audio regridding solutions for DJs allow for the correction of drifting tempos i
 `dotnet build -t:Run -f net10.0-ios`
 
 `dotnet build -t:Run -f net10.0-maccatalyst`
-
-
-# Current Issues
-
-1. Reliance on runtime package for analysis: `pip install librosa numpy soundfile` 
